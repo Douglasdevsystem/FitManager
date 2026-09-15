@@ -6,7 +6,7 @@
 import { useEffect, useState } from "react";
 import { collection, collectionGroup, limit, onSnapshot, orderBy, query } from "firebase/firestore";
 import { db, COLLECTIONS } from "./firebase";
-import type { Aluno, Checkin, Treino, Usuario, LogAuditoria } from "./types";
+import type { Aluno, Checkin, Treino, Usuario, LogAuditoria, ExecucaoTreino, ExercicioBiblioteca } from "./types";
 
 interface QueryState<T> {
   data: T[];
@@ -124,6 +124,54 @@ export function useLogsAuditoria(max = 100): QueryState<LogAuditoria> {
     return unsubscribe;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [max]);
+
+  return state;
+}
+
+export function useExecucoesTreino(alunoId: string | null): QueryState<ExecucaoTreino> {
+  const [state, setState] = useState<QueryState<ExecucaoTreino>>({ data: [], loading: true, error: null });
+
+  useEffect(() => {
+    if (!alunoId) {
+      setState({ data: [], loading: false, error: null });
+      return;
+    }
+    const q = query(collection(db, COLLECTIONS.alunos, alunoId, COLLECTIONS.execucoesTreino), orderBy("data", "desc"), limit(60));
+    const unsubscribe = onSnapshot(
+      q,
+      (snapshot) => {
+        const data = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }) as ExecucaoTreino);
+        setState({ data, loading: false, error: null });
+      },
+      (err) => {
+        console.error("[useExecucoesTreino] falha ao ler execuções de treino:", err);
+        setState((prev) => ({ ...prev, loading: false, error: err.message }));
+      }
+    );
+    return unsubscribe;
+  }, [alunoId]);
+
+  return state;
+}
+
+export function useExerciciosBiblioteca(): QueryState<ExercicioBiblioteca> {
+  const [state, setState] = useState<QueryState<ExercicioBiblioteca>>({ data: [], loading: true, error: null });
+
+  useEffect(() => {
+    const q = query(collection(db, COLLECTIONS.exerciciosBiblioteca), orderBy("nome"));
+    const unsubscribe = onSnapshot(
+      q,
+      (snapshot) => {
+        const data = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }) as ExercicioBiblioteca);
+        setState({ data, loading: false, error: null });
+      },
+      (err) => {
+        console.error("[useExerciciosBiblioteca] falha ao ler biblioteca de exercícios:", err);
+        setState((prev) => ({ ...prev, loading: false, error: err.message }));
+      }
+    );
+    return unsubscribe;
+  }, []);
 
   return state;
 }

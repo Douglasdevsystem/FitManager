@@ -1,11 +1,12 @@
 import { useState, useRef, useEffect } from "react";
-import { createUserWithEmailAndPassword, signInWithEmailAndPassword, sendPasswordResetEmail, onAuthStateChanged } from "firebase/auth";
-import { addDoc, collection, doc, setDoc, updateDoc, deleteDoc, serverTimestamp } from "firebase/firestore";
-import { ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
+import { createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, sendPasswordResetEmail, onAuthStateChanged } from "firebase/auth";
+import { addDoc, collection, doc, getDoc, setDoc, updateDoc, deleteDoc, serverTimestamp } from "firebase/firestore";
+import { ref, uploadBytes, uploadBytesResumable, getDownloadURL, deleteObject } from "firebase/storage";
 import { httpsCallable } from "firebase/functions";
 import { auth, db, storage, functions, COLLECTIONS, STORAGE_PATHS, createAuthAccountWithoutSignIn } from "./lib/firebase";
-import { useAlunos, useCheckins, useTreinos, useUsuarios, useLogsAuditoria, isToday } from "./lib/hooks";
-import type { Aluno, AlunoStatus, Checkin, Usuario, UsuarioPerfil } from "./lib/types";
+import { useAlunos, useCheckins, useTreinos, useUsuarios, useLogsAuditoria, useExecucoesTreino, useExerciciosBiblioteca, isToday } from "./lib/hooks";
+import type { Aluno, AlunoStatus, Checkin, Treino, Exercicio, ExercicioBiblioteca, GrupoMuscular, Usuario, UsuarioPerfil } from "./lib/types";
+import { GRUPOS_MUSCULARES } from "./lib/types";
 import { CameraFeedPanel } from "./components/CameraFeedPanel";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -15,6 +16,7 @@ type Screen =
   | "students"
   | "checkin"
   | "workouts"
+  | "exercises"
   | "billing"
   | "audit"
   | "settings"
@@ -25,65 +27,6 @@ type StudentScreen = "meu-treino" | "execucao" | "historico" | "assinatura";
 type AppMode = "login" | "signup" | "admin" | "student";
 
 type Plan = "Mensal" | "Trimestral" | "Anual";
-type PayStatus = "Pago" | "Pendente" | "Vencido";
-
-interface Student {
-  id: number;
-  name: string;
-  photo: string;
-  cpf: string;
-  rg: string;
-  address: string;
-  whatsapp: string;
-  plan: Plan;
-  since: string;
-  dueDate: string;
-  status: PayStatus;
-  active: boolean;
-  lastCheckin?: string;
-  todayCheckin?: boolean;
-}
-
-interface CheckinEntry {
-  id: number;
-  studentId: number;
-  studentName: string;
-  time: string;
-  date: string;
-  type: "entrada" | "saída";
-}
-
-interface Exercise {
-  id: number;
-  name: string;
-  sets: number;
-  reps: string;
-  load: string;
-  tip: string;
-  image: string;
-}
-
-interface Workout {
-  id: number;
-  studentId: number;
-  studentName: string;
-  title: string;
-  date: string;
-  exercises: Exercise[];
-  instructor: string;
-}
-
-interface WorkoutLog {
-  id: number;
-  workoutId: number;
-  workoutTitle: string;
-  date: string;
-  startTime: string;
-  endTime: string;
-  durationMin: number;
-  completedCount: number;
-  totalCount: number;
-}
 
 interface PlanConfig {
   id: number;
@@ -108,96 +51,9 @@ interface GymHours {
 }
 
 // ─── Mock Data ────────────────────────────────────────────────────────────────
-
-const STUDENTS: Student[] = [
-  { id: 1, name: "Carlos Mendes", photo: "https://images.unsplash.com/photo-1570295999919-56ceb5ecca61?w=80&h=80&fit=crop&auto=format", cpf: "123.456.789-00", rg: "12.345.678-9", address: "Rua das Flores, 123 – São Paulo/SP", whatsapp: "11999990001", plan: "Mensal", since: "2024-03-01", dueDate: "2026-09-16", status: "Pendente", active: true, lastCheckin: "hoje 07:42", todayCheckin: true },
-  { id: 2, name: "Fernanda Lima", photo: "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=80&h=80&fit=crop&auto=format", cpf: "987.654.321-00", rg: "98.765.432-1", address: "Av. Paulista, 456 – São Paulo/SP", whatsapp: "11999990002", plan: "Trimestral", since: "2024-01-15", dueDate: "2026-10-15", status: "Pago", active: true, lastCheckin: "hoje 08:15", todayCheckin: true },
-  { id: 3, name: "Rodrigo Costa", photo: "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=80&h=80&fit=crop&auto=format", cpf: "111.222.333-44", rg: "11.222.333-4", address: "Rua Augusta, 789 – São Paulo/SP", whatsapp: "11999990003", plan: "Anual", since: "2023-09-01", dueDate: "2026-09-01", status: "Vencido", active: false, lastCheckin: "15/08/2026" },
-  { id: 4, name: "Juliana Rocha", photo: "https://images.unsplash.com/photo-1438761681033-6461ffad8d80?w=80&h=80&fit=crop&auto=format", cpf: "444.555.666-77", rg: "44.555.666-7", address: "Rua Consolação, 321 – São Paulo/SP", whatsapp: "11999990004", plan: "Mensal", since: "2026-08-01", dueDate: "2026-09-30", status: "Pago", active: true, lastCheckin: "hoje 09:30", todayCheckin: true },
-  { id: 5, name: "Pedro Alves", photo: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=80&h=80&fit=crop&auto=format", cpf: "555.666.777-88", rg: "55.666.777-8", address: "Av. Brasil, 654 – São Paulo/SP", whatsapp: "11999990005", plan: "Trimestral", since: "2026-06-01", dueDate: "2026-09-14", status: "Vencido", active: false, lastCheckin: "01/09/2026" },
-  { id: 6, name: "Mariana Silva", photo: "https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=80&h=80&fit=crop&auto=format", cpf: "666.777.888-99", rg: "66.777.888-9", address: "Rua Oscar Freire, 987 – São Paulo/SP", whatsapp: "11999990006", plan: "Anual", since: "2025-09-01", dueDate: "2026-12-01", status: "Pago", active: true, lastCheckin: "hoje 06:55", todayCheckin: true },
-];
-
-const CHECKINS: CheckinEntry[] = [
-  { id: 1, studentId: 1, studentName: "Carlos Mendes", time: "07:42", date: "15/09/2026", type: "entrada" },
-  { id: 2, studentId: 2, studentName: "Fernanda Lima", time: "08:15", date: "15/09/2026", type: "entrada" },
-  { id: 3, studentId: 6, studentName: "Mariana Silva", time: "06:55", date: "15/09/2026", type: "entrada" },
-  { id: 4, studentId: 4, studentName: "Juliana Rocha", time: "09:30", date: "15/09/2026", type: "entrada" },
-  { id: 5, studentId: 1, studentName: "Carlos Mendes", time: "09:10", date: "14/09/2026", type: "entrada" },
-  { id: 6, studentId: 1, studentName: "Carlos Mendes", time: "10:45", date: "14/09/2026", type: "saída" },
-  { id: 7, studentId: 5, studentName: "Pedro Alves", time: "07:00", date: "01/09/2026", type: "entrada" },
-  { id: 8, studentId: 3, studentName: "Rodrigo Costa", time: "08:30", date: "15/08/2026", type: "entrada" },
-];
-
-const WORKOUTS: Workout[] = [
-  {
-    id: 1, studentId: 1, studentName: "Carlos Mendes", title: "Treino A – Peito e Tríceps",
-    date: "2026-09-15", instructor: "Rafael Torres",
-    exercises: [
-      { id: 1, name: "Supino Reto", sets: 4, reps: "12", load: "60 kg", tip: "Mantenha os cotovelos a 45°", image: "https://images.unsplash.com/photo-1571019614242-c5c5dee9f50b?w=200&h=120&fit=crop&auto=format" },
-      { id: 2, name: "Crucifixo Inclinado", sets: 3, reps: "15", load: "14 kg", tip: "Amplitude controlada", image: "https://images.unsplash.com/photo-1534438327276-14e5300c3a48?w=200&h=120&fit=crop&auto=format" },
-      { id: 3, name: "Tríceps Pulley", sets: 4, reps: "12", load: "30 kg", tip: "Cotovelo fixo ao lado do corpo", image: "https://images.unsplash.com/photo-1581009137042-c552e485697a?w=200&h=120&fit=crop&auto=format" },
-      { id: 4, name: "Mergulho entre Bancos", sets: 3, reps: "10", load: "Corporal", tip: "Não desça além de 90°", image: "https://images.unsplash.com/photo-1601422407692-ec4eeec1d9b3?w=200&h=120&fit=crop&auto=format" },
-      { id: 5, name: "Peck Deck", sets: 3, reps: "15", load: "40 kg", tip: "Espirre os peitoral ao ponto máximo", image: "https://images.unsplash.com/photo-1571019613454-1cb2f99b2d8b?w=200&h=120&fit=crop&auto=format" },
-    ],
-  },
-  {
-    id: 2, studentId: 2, studentName: "Fernanda Lima", title: "Treino Funcional",
-    date: "2026-09-15", instructor: "Rafael Torres",
-    exercises: [
-      { id: 1, name: "Agachamento Livre", sets: 4, reps: "20", load: "Corporal", tip: "Joelhos alinhados com os pés", image: "https://images.unsplash.com/photo-1566241440091-ec10de8db2e1?w=200&h=120&fit=crop&auto=format" },
-      { id: 2, name: "Prancha Isométrica", sets: 3, reps: "60s", load: "—", tip: "Core contraído, quadril neutro", image: "https://images.unsplash.com/photo-1518611012118-696072aa579a?w=200&h=120&fit=crop&auto=format" },
-      { id: 3, name: "Burpee", sets: 3, reps: "15", load: "—", tip: "Explosão na subida", image: "https://images.unsplash.com/photo-1599058945522-28d584b6f0ff?w=200&h=120&fit=crop&auto=format" },
-      { id: 4, name: "Mountain Climber", sets: 3, reps: "30s", load: "—", tip: "Ritmo constante, tronco firme", image: "https://images.unsplash.com/photo-1571019613454-1cb2f99b2d8b?w=200&h=120&fit=crop&auto=format" },
-    ],
-  },
-  {
-    id: 3, studentId: 4, studentName: "Juliana Rocha", title: "Treino B – Costas e Bíceps",
-    date: "2026-09-12", instructor: "Ana Paula",
-    exercises: [
-      { id: 1, name: "Pull-up (Barra Fixa)", sets: 3, reps: "8", load: "Corporal", tip: "Escápulas retraídas no topo", image: "https://images.unsplash.com/photo-1526506118085-60ce8714f8c5?w=200&h=120&fit=crop&auto=format" },
-      { id: 2, name: "Remada Curvada", sets: 4, reps: "12", load: "50 kg", tip: "Costas neutras, puxe até o umbigo", image: "https://images.unsplash.com/photo-1534438327276-14e5300c3a48?w=200&h=120&fit=crop&auto=format" },
-      { id: 3, name: "Rosca Direta", sets: 4, reps: "12", load: "20 kg", tip: "Sem balançar o tronco", image: "https://images.unsplash.com/photo-1581009137042-c552e485697a?w=200&h=120&fit=crop&auto=format" },
-    ],
-  },
-  {
-    id: 4, studentId: 1, studentName: "Carlos Mendes", title: "Treino B – Costas e Ombros",
-    date: "2026-09-13", instructor: "Rafael Torres",
-    exercises: [
-      { id: 1, name: "Puxada Alta", sets: 4, reps: "12", load: "55 kg", tip: "Puxe até a altura do queixo", image: "https://images.unsplash.com/photo-1526506118085-60ce8714f8c5?w=200&h=120&fit=crop&auto=format" },
-      { id: 2, name: "Remada Baixa", sets: 4, reps: "12", load: "45 kg", tip: "Costas retas, sem impulso", image: "https://images.unsplash.com/photo-1534438327276-14e5300c3a48?w=200&h=120&fit=crop&auto=format" },
-      { id: 3, name: "Desenvolvimento com Halteres", sets: 3, reps: "10", load: "16 kg", tip: "Não trave o cotovelo no topo", image: "https://images.unsplash.com/photo-1571019613454-1cb2f99b2d8b?w=200&h=120&fit=crop&auto=format" },
-      { id: 4, name: "Elevação Lateral", sets: 3, reps: "15", load: "8 kg", tip: "Cotovelos levemente flexionados", image: "https://images.unsplash.com/photo-1581009137042-c552e485697a?w=200&h=120&fit=crop&auto=format" },
-    ],
-  },
-  {
-    id: 5, studentId: 2, studentName: "Fernanda Lima", title: "Treino de Força – Inferiores",
-    date: "2026-09-13", instructor: "Ana Paula",
-    exercises: [
-      { id: 1, name: "Leg Press", sets: 4, reps: "12", load: "120 kg", tip: "Não trave os joelhos no topo", image: "https://images.unsplash.com/photo-1571019614242-c5c5dee9f50b?w=200&h=120&fit=crop&auto=format" },
-      { id: 2, name: "Cadeira Extensora", sets: 3, reps: "15", load: "35 kg", tip: "Movimento controlado", image: "https://images.unsplash.com/photo-1534438327276-14e5300c3a48?w=200&h=120&fit=crop&auto=format" },
-      { id: 3, name: "Cadeira Flexora", sets: 3, reps: "15", load: "30 kg", tip: "Não balance o quadril", image: "https://images.unsplash.com/photo-1581009137042-c552e485697a?w=200&h=120&fit=crop&auto=format" },
-    ],
-  },
-  {
-    id: 6, studentId: 2, studentName: "Fernanda Lima", title: "Mobilidade e Alongamento",
-    date: "2026-09-11", instructor: "Rafael Torres",
-    exercises: [
-      { id: 1, name: "Alongamento de Posterior", sets: 2, reps: "30s", load: "—", tip: "Sem dor, apenas tensão leve", image: "https://images.unsplash.com/photo-1518611012118-696072aa579a?w=200&h=120&fit=crop&auto=format" },
-      { id: 2, name: "Mobilidade de Quadril", sets: 2, reps: "10", load: "—", tip: "Amplitude máxima confortável", image: "https://images.unsplash.com/photo-1599058945522-28d584b6f0ff?w=200&h=120&fit=crop&auto=format" },
-      { id: 3, name: "Gato-Camelo", sets: 2, reps: "12", load: "—", tip: "Respiração sincronizada com o movimento", image: "https://images.unsplash.com/photo-1571019613454-1cb2f99b2d8b?w=200&h=120&fit=crop&auto=format" },
-    ],
-  },
-];
-
-const WORKOUT_LOGS: WorkoutLog[] = [
-  { id: 1, workoutId: 1, workoutTitle: "Treino A – Peito e Tríceps", date: "13/09/2026", startTime: "07:40", endTime: "08:42", durationMin: 62, completedCount: 5, totalCount: 5 },
-  { id: 2, workoutId: 1, workoutTitle: "Treino A – Peito e Tríceps", date: "10/09/2026", startTime: "07:55", endTime: "08:55", durationMin: 60, completedCount: 4, totalCount: 5 },
-  { id: 3, workoutId: 1, workoutTitle: "Treino A – Peito e Tríceps", date: "08/09/2026", startTime: "08:10", endTime: "09:05", durationMin: 55, completedCount: 5, totalCount: 5 },
-  { id: 4, workoutId: 1, workoutTitle: "Treino A – Peito e Tríceps", date: "05/09/2026", startTime: "07:30", endTime: "08:40", durationMin: 70, completedCount: 3, totalCount: 5 },
-  { id: 5, workoutId: 1, workoutTitle: "Treino A – Peito e Tríceps", date: "02/09/2026", startTime: "08:00", endTime: "09:00", durationMin: 60, completedCount: 5, totalCount: 5 },
-  { id: 6, workoutId: 1, workoutTitle: "Treino A – Peito e Tríceps", date: "30/08/2026", startTime: "07:45", endTime: "08:50", durationMin: 65, completedCount: 5, totalCount: 5 },
-];
+// Apenas configuração da academia ainda não conectada ao Firestore (ver
+// Configurações → Planos/Notificações/Dados da Academia). Alunos, treinos,
+// check-ins e o portal do aluno usam dados reais do Firebase.
 
 const PLAN_CONFIGS: PlanConfig[] = [
   { id: 1, name: "Mensal", price: 120, description: "Acesso completo à academia, renovação mensal." },
@@ -219,17 +75,12 @@ const GYM_HOURS: GymHours[] = [
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-const statusColors: Record<PayStatus, string> = {
-  Pago: "text-green-400 bg-green-400/10 border-green-400/30",
-  Pendente: "text-amber-400 bg-amber-400/10 border-amber-400/30",
-  Vencido: "text-red-400 bg-red-400/10 border-red-400/30",
-};
-
-// Light-mode badge tokens used across the admin (ERP-style) screens.
-const statusColorsAdmin: Record<PayStatus, string> = {
-  Pago: "text-green-700 bg-green-50 border-green-200",
-  Pendente: "text-amber-700 bg-amber-50 border-amber-200",
-  Vencido: "text-red-700 bg-red-50 border-red-200",
+// Dark-theme badge tokens for the student portal (Aluno.status: ativo/pendente/vencido/inativo).
+const alunoStatusColorsDark: Record<string, string> = {
+  ativo: "text-green-400 bg-green-400/10 border-green-400/30",
+  pendente: "text-amber-400 bg-amber-400/10 border-amber-400/30",
+  vencido: "text-red-400 bg-red-400/10 border-red-400/30",
+  inativo: "text-slate-400 bg-slate-400/10 border-slate-400/30",
 };
 
 // Badge colors for the real Aluno.status values (ativo/vencido/inativo/pendente).
@@ -439,11 +290,12 @@ function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean
 
 // ─── LOGIN ────────────────────────────────────────────────────────────────────
 
-function LoginScreen({ onLogin, onGoToSignup }: { onLogin: (mode: AppMode, studentId?: number) => void; onGoToSignup: () => void }) {
+function LoginScreen({ onLogin, onGoToSignup }: { onLogin: (mode: AppMode, aluno?: Aluno) => void; onGoToSignup: () => void }) {
   const [tab, setTab] = useState<"admin" | "student">("admin");
   const [adminEmail, setAdminEmail] = useState("");
   const [adminPass, setAdminPass] = useState("");
-  const [studentId, setStudentId] = useState<number>(1);
+  const [studentEmail, setStudentEmail] = useState("");
+  const [studentPass, setStudentPass] = useState("");
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
@@ -465,7 +317,36 @@ function LoginScreen({ onLogin, onGoToSignup }: { onLogin: (mode: AppMode, stude
     }
   };
 
-  const handleStudent = () => { onLogin("student", studentId); };
+  const handleStudent = async () => {
+    if (!studentEmail || !studentPass) {
+      setError("Informe e-mail e senha.");
+      return;
+    }
+    setSubmitting(true);
+    setError("");
+    try {
+      const credential = await signInWithEmailAndPassword(auth, studentEmail, studentPass);
+      const usuarioSnap = await getDoc(doc(db, COLLECTIONS.usuarios, credential.user.uid));
+      const usuario = usuarioSnap.data() as Usuario | undefined;
+      if (!usuario || usuario.perfil !== "aluno" || !usuario.alunoId) {
+        await signOut(auth);
+        setError("Esta conta não tem um acesso de aluno vinculado. Fale com a recepção.");
+        return;
+      }
+      const alunoSnap = await getDoc(doc(db, COLLECTIONS.alunos, usuario.alunoId));
+      if (!alunoSnap.exists()) {
+        await signOut(auth);
+        setError("Cadastro de aluno não encontrado. Fale com a recepção.");
+        return;
+      }
+      onLogin("student", { id: alunoSnap.id, ...alunoSnap.data() } as Aluno);
+    } catch (err) {
+      const code = (err as { code?: string })?.code ?? "";
+      setError(AUTH_ERROR_MESSAGES[code] ?? "E-mail ou senha incorretos.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
 
   return (
     <div className="min-h-screen bg-[#050d1a] flex items-center justify-center p-4">
@@ -515,26 +396,21 @@ function LoginScreen({ onLogin, onGoToSignup }: { onLogin: (mode: AppMode, stude
           </div>
         ) : (
           <div className="rounded-xl border border-[#163059] bg-[#0f2040]/60 p-6 space-y-4">
-            <p className="text-xs text-slate-400 font-display uppercase tracking-wider">Selecionar aluno (demo)</p>
-            <div className="space-y-2">
-              {STUDENTS.filter((s) => s.active).map((s) => (
-                <button
-                  key={s.id}
-                  onClick={() => setStudentId(s.id)}
-                  className={`w-full flex items-center gap-3 p-3 rounded-xl border transition-all ${studentId === s.id ? "border-green-400/60 bg-green-400/10" : "border-[#163059] hover:border-[#2a5499]"}`}
-                >
-                  <img src={s.photo} alt={s.name} className="w-9 h-9 rounded-full object-cover border border-[#163059]" />
-                  <div className="text-left flex-1">
-                    <p className="font-display font-semibold text-sm text-white">{s.name}</p>
-                    <p className="text-xs text-slate-400">{s.plan}</p>
-                  </div>
-                  {studentId === s.id && <span className="text-green-400 text-lg">✓</span>}
-                </button>
-              ))}
+            <div>
+              <label className="block text-xs font-display text-slate-400 uppercase tracking-wider mb-1.5">E-mail</label>
+              <input type="email" value={studentEmail} onChange={(e) => { setStudentEmail(e.target.value); setError(""); }} placeholder="voce@email.com" className="w-full bg-[#163059]/40 border border-[#163059] rounded-lg px-3 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-green-400 transition-colors" />
             </div>
-            <button onClick={handleStudent} className="w-full py-3 rounded-lg bg-green-500 hover:bg-green-400 text-black font-display font-bold text-sm transition-colors">
-              Acessar Portal do Aluno
+            <div>
+              <label className="block text-xs font-display text-slate-400 uppercase tracking-wider mb-1.5">Senha</label>
+              <input type="password" placeholder="••••••••" value={studentPass} onChange={(e) => { setStudentPass(e.target.value); setError(""); }} className="w-full bg-[#163059]/40 border border-[#163059] rounded-lg px-3 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-green-400 transition-colors" />
+            </div>
+            {error && <p className="text-xs text-red-400">{error}</p>}
+            <button onClick={handleStudent} disabled={submitting} className="w-full py-3 rounded-lg bg-green-500 hover:bg-green-400 disabled:opacity-60 text-black font-display font-bold text-sm transition-colors mt-1">
+              {submitting ? "Entrando..." : "Acessar Portal do Aluno"}
             </button>
+            <p className="text-center text-xs text-slate-500">
+              Seu acesso é criado pela recepção da academia ao se matricular.
+            </p>
           </div>
         )}
       </div>
@@ -677,13 +553,43 @@ function CreateAccountScreen({ onCreated, onBack }: { onCreated: () => void; onB
 
 // ─── STUDENT PORTAL ───────────────────────────────────────────────────────────
 
-function StudentPortal({ student, onLogout }: { student: Student; onLogout: () => void }) {
+function StudentPortal({ student, onLogout }: { student: Aluno; onLogout: () => void }) {
   const [screen, setScreen] = useState<StudentScreen>("meu-treino");
   const [mobileMenu, setMobileMenu] = useState(false);
-  const [activeWorkoutId, setActiveWorkoutId] = useState<number | null>(null);
+  const [activeWorkoutId, setActiveWorkoutId] = useState<string | null>(null);
 
-  const studentWorkouts = WORKOUTS.filter((w) => w.studentId === student.id);
-  const activeWorkout = studentWorkouts.find((w) => w.id === activeWorkoutId) ?? null;
+  const { data: treinos } = useTreinos();
+  const studentWorkouts = treinos.filter((t) => t.alunoId === student.id && t.ativo);
+  const activeWorkout = studentWorkouts.find((t) => t.id === activeWorkoutId) ?? null;
+
+  const handleFinishWorkout = async (summary: { treino: Treino; completedCount: number; totalCount: number; startedAt: Date; finishedAt: Date }) => {
+    try {
+      await addDoc(collection(db, COLLECTIONS.alunos, student.id, COLLECTIONS.execucoesTreino), {
+        treinoId: summary.treino.id,
+        treinoTitulo: summary.treino.titulo,
+        data: summary.finishedAt.toISOString(),
+        horaInicio: summary.startedAt.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }),
+        horaFim: summary.finishedAt.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }),
+        duracaoMin: Math.round((summary.finishedAt.getTime() - summary.startedAt.getTime()) / 60000),
+        exerciciosConcluidos: summary.completedCount,
+        totalExercicios: summary.totalCount,
+        criadoEm: serverTimestamp(),
+      });
+    } catch (err) {
+      console.error("[StudentPortal] falha ao registrar execução do treino:", err);
+    }
+    setScreen("historico");
+  };
+
+  const AlunoAvatar = ({ size }: { size: number }) => (
+    student.fotoUrl ? (
+      <img src={student.fotoUrl} alt={student.nome} className="rounded-full object-cover border-2 border-green-400/40" style={{ width: size, height: size }} />
+    ) : (
+      <span className="rounded-full bg-[#163059]/60 border-2 border-green-400/40 flex items-center justify-center text-slate-400" style={{ width: size, height: size }}>
+        <Icon name="user" className="w-1/2 h-1/2" />
+      </span>
+    )
+  );
 
   const NAV = [
     { id: "meu-treino" as StudentScreen, label: "Meu Treino", icon: "🏋️" },
@@ -715,7 +621,7 @@ function StudentPortal({ student, onLogout }: { student: Student; onLogout: () =
           ))}
         </nav>
         <div className="flex items-center gap-2">
-          <img src={student.photo} alt={student.name} className="w-8 h-8 rounded-full object-cover border-2 border-green-400/40" />
+          <AlunoAvatar size={32} />
           <button onClick={onLogout} className="text-xs text-slate-500 hover:text-white transition-colors hidden sm:block">Sair</button>
           <button onClick={() => setMobileMenu(!mobileMenu)} className="md:hidden text-slate-400 hover:text-white ml-1">☰</button>
         </div>
@@ -726,9 +632,9 @@ function StudentPortal({ student, onLogout }: { student: Student; onLogout: () =
         <div className="md:hidden fixed inset-0 z-50 bg-black/60" onClick={() => setMobileMenu(false)}>
           <div className="absolute right-0 top-0 bottom-0 w-56 bg-[#091426] border-l border-[#163059] p-4" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center gap-3 mb-6 px-2">
-              <img src={student.photo} alt={student.name} className="w-10 h-10 rounded-full object-cover border-2 border-green-400/40" />
+              <AlunoAvatar size={40} />
               <div>
-                <p className="font-display font-bold text-white text-sm">{student.name}</p>
+                <p className="font-display font-bold text-white text-sm">{student.nome}</p>
                 <p className="text-xs text-slate-400">Portal do Aluno</p>
               </div>
             </div>
@@ -753,9 +659,9 @@ function StudentPortal({ student, onLogout }: { student: Student; onLogout: () =
           />
         )}
         {screen === "execucao" && activeWorkout && (
-          <WorkoutExecution workout={activeWorkout} onFinish={() => setScreen("historico")} onCancel={() => setScreen("meu-treino")} />
+          <WorkoutExecution workout={activeWorkout} onFinish={handleFinishWorkout} onCancel={() => setScreen("meu-treino")} />
         )}
-        {screen === "historico" && <WorkoutHistory />}
+        {screen === "historico" && <WorkoutHistory alunoId={student.id} />}
         {screen === "assinatura" && <MySubscription student={student} />}
       </main>
 
@@ -778,13 +684,39 @@ function StudentPortal({ student, onLogout }: { student: Student; onLogout: () =
 const MONTHS_PT = ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"];
 
 function formatWorkoutDate(iso: string) {
-  const [, month, day] = iso.split("-").map(Number);
-  return `${day} ${MONTHS_PT[month - 1]}`;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return `${d.getDate()} ${MONTHS_PT[d.getMonth()]}`;
 }
 
-function MyWorkout({ workouts, onStart }: { workouts: Workout[]; onStart: (workoutId: number) => void }) {
-  const sorted = [...workouts].sort((a, b) => b.date.localeCompare(a.date));
-  const [expandedId, setExpandedId] = useState<number | null>(sorted[0]?.id ?? null);
+/** Player inline de mídia do exercício — vídeo com controles ou foto (clicável para ampliar). Usado tanto em "Meus Treinos" quanto na execução. */
+function ExerciseMedia({ tipoMidia, urlMidia }: { tipoMidia?: string; urlMidia?: string }) {
+  const [expanded, setExpanded] = useState(false);
+  if (!urlMidia) return null;
+
+  if (tipoMidia === "video") {
+    return <video src={urlMidia} controls className="w-full rounded-lg bg-black mt-2 max-h-64" />;
+  }
+  return (
+    <>
+      <img
+        src={urlMidia}
+        alt="Demonstração do exercício"
+        onClick={() => setExpanded(true)}
+        className="w-full rounded-lg object-cover mt-2 max-h-48 cursor-zoom-in"
+      />
+      {expanded && (
+        <div className="fixed inset-0 z-[60] bg-black/90 flex items-center justify-center p-4" onClick={() => setExpanded(false)}>
+          <img src={urlMidia} alt="Demonstração do exercício" className="max-w-full max-h-full rounded-lg" />
+        </div>
+      )}
+    </>
+  );
+}
+
+function MyWorkout({ workouts, onStart }: { workouts: Treino[]; onStart: (workoutId: string) => void }) {
+  const sorted = [...workouts].sort((a, b) => b.dataCriacao.localeCompare(a.dataCriacao));
+  const [expandedId, setExpandedId] = useState<string | null>(sorted[0]?.id ?? null);
 
   if (workouts.length === 0) {
     return (
@@ -806,6 +738,7 @@ function MyWorkout({ workouts, onStart }: { workouts: Workout[]; onStart: (worko
       <div className="space-y-3">
         {sorted.map((w) => {
           const isExpanded = expandedId === w.id;
+          const exercicios = [...w.exercicios].sort((a, b) => (a.ordem ?? 0) - (b.ordem ?? 0));
           return (
             <div key={w.id} className="rounded-xl border border-[#163059] bg-[#0f2040]/50 overflow-hidden">
               <button
@@ -813,9 +746,9 @@ function MyWorkout({ workouts, onStart }: { workouts: Workout[]; onStart: (worko
                 className="w-full flex items-center justify-between gap-3 p-4 text-left"
               >
                 <div className="min-w-0">
-                  <p className="text-xs text-slate-400 font-display uppercase tracking-widest">{formatWorkoutDate(w.date)}</p>
-                  <p className="font-display font-bold text-white text-lg leading-tight truncate">{w.title}</p>
-                  <p className="text-xs text-slate-400 mt-0.5">Instrutor: <span className="text-slate-300">{w.instructor}</span> · {w.exercises.length} exercícios</p>
+                  <p className="text-xs text-slate-400 font-display uppercase tracking-widest">{formatWorkoutDate(w.dataCriacao)}</p>
+                  <p className="font-display font-bold text-white text-lg leading-tight truncate">{w.titulo}</p>
+                  <p className="text-xs text-slate-400 mt-0.5">{exercicios.length} exercícios</p>
                 </div>
                 <span className="text-slate-500 shrink-0 text-xs px-1">{isExpanded ? "▲" : "▼"}</span>
               </button>
@@ -823,21 +756,22 @@ function MyWorkout({ workouts, onStart }: { workouts: Workout[]; onStart: (worko
               {isExpanded && (
                 <div className="border-t border-[#163059]/60 p-4 space-y-3">
                   <div className="space-y-3">
-                    {w.exercises.map((ex, i) => (
-                      <div key={ex.id} className="flex gap-3 p-3 rounded-xl border border-[#163059] bg-[#091426]/40">
-                        <div className="relative shrink-0">
-                          <img src={ex.image} alt={ex.name} className="w-20 h-16 rounded-lg object-cover bg-[#163059]" />
-                          <span className="absolute -top-1.5 -left-1.5 w-5 h-5 rounded-full bg-[#163059] border border-[#2a5499] text-xs text-slate-300 font-mono-data flex items-center justify-center">{i + 1}</span>
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <p className="font-display font-bold text-white text-sm">{ex.name}</p>
-                          <div className="flex gap-3 mt-1 flex-wrap">
-                            <span className="text-xs text-slate-400"><span className="text-green-400 font-mono-data">{ex.sets}</span> séries</span>
-                            <span className="text-xs text-slate-400"><span className="text-green-400 font-mono-data">{ex.reps}</span> reps</span>
-                            <span className="text-xs text-slate-400">carga: <span className="text-slate-300 font-mono-data">{ex.load}</span></span>
+                    {exercicios.map((ex, i) => (
+                      <div key={i} className="p-3 rounded-xl border border-[#163059] bg-[#091426]/40">
+                        <div className="flex gap-3">
+                          <span className="shrink-0 w-6 h-6 rounded-full bg-[#163059] border border-[#2a5499] text-xs text-slate-300 font-mono-data flex items-center justify-center">{i + 1}</span>
+                          <div className="flex-1 min-w-0">
+                            <p className="font-display font-bold text-white text-sm">{ex.nome}</p>
+                            <div className="flex gap-3 mt-1 flex-wrap">
+                              <span className="text-xs text-slate-400"><span className="text-green-400 font-mono-data">{ex.series}</span> séries</span>
+                              <span className="text-xs text-slate-400"><span className="text-green-400 font-mono-data">{ex.repeticoes}</span> reps</span>
+                              {ex.carga && <span className="text-xs text-slate-400">carga: <span className="text-slate-300 font-mono-data">{ex.carga}</span></span>}
+                              <span className="text-xs text-slate-400">descanso: <span className="text-slate-300 font-mono-data">{ex.descanso}</span></span>
+                            </div>
+                            {ex.observacoes && <p className="text-xs text-slate-500 mt-1 italic">{ex.observacoes}</p>}
                           </div>
-                          <p className="text-xs text-slate-500 mt-1 italic">{ex.tip}</p>
                         </div>
+                        <ExerciseMedia tipoMidia={ex.tipoMidia} urlMidia={ex.urlMidia} />
                       </div>
                     ))}
                   </div>
@@ -858,7 +792,16 @@ function MyWorkout({ workouts, onStart }: { workouts: Workout[]; onStart: (worko
 
 // ─── Workout Execution ────────────────────────────────────────────────────────
 
-function WorkoutExecution({ workout, onFinish, onCancel }: { workout: Workout; onFinish: () => void; onCancel: () => void }) {
+interface WorkoutFinishSummary {
+  treino: Treino;
+  completedCount: number;
+  totalCount: number;
+  startedAt: Date;
+  finishedAt: Date;
+}
+
+function WorkoutExecution({ workout, onFinish, onCancel }: { workout: Treino; onFinish: (summary: WorkoutFinishSummary) => void; onCancel: () => void }) {
+  const exercicios = [...workout.exercicios].sort((a, b) => (a.ordem ?? 0) - (b.ordem ?? 0));
   const [checked, setChecked] = useState<Set<number>>(new Set());
   const [elapsed, setElapsed] = useState(0);
   const [started] = useState(new Date());
@@ -871,18 +814,19 @@ function WorkoutExecution({ workout, onFinish, onCancel }: { workout: Workout; o
     return () => clearInterval(t);
   }, [done]);
 
-  const toggle = (id: number) => {
+  const toggle = (i: number) => {
     setChecked((prev) => {
       const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
+      next.has(i) ? next.delete(i) : next.add(i);
       return next;
     });
   };
 
-  const pct = Math.round((checked.size / workout.exercises.length) * 100);
+  const pct = Math.round((checked.size / exercicios.length) * 100);
 
   const handleFinish = () => {
     setDone(true);
+    onFinish({ treino: workout, completedCount: checked.size, totalCount: exercicios.length, startedAt: started, finishedAt: new Date() });
   };
 
   if (done) {
@@ -901,7 +845,7 @@ function WorkoutExecution({ workout, onFinish, onCancel }: { workout: Workout; o
         <div className="grid grid-cols-3 gap-3 w-full max-w-xs">
           {[
             { label: "Duração", value: formatDuration(elapsed) },
-            { label: "Concluídos", value: `${checked.size}/${workout.exercises.length}` },
+            { label: "Concluídos", value: `${checked.size}/${exercicios.length}` },
             { label: "Progresso", value: `${pct}%` },
           ].map((s) => (
             <div key={s.label} className="rounded-xl border border-[#163059] bg-[#0f2040]/60 p-3 text-center">
@@ -910,9 +854,7 @@ function WorkoutExecution({ workout, onFinish, onCancel }: { workout: Workout; o
             </div>
           ))}
         </div>
-        <button onClick={onFinish} className="w-full max-w-xs py-3 rounded-xl bg-green-500 hover:bg-green-400 text-black font-display font-bold transition-colors">
-          Ver Histórico
-        </button>
+        <p className="text-xs text-slate-500">Registrado no seu histórico.</p>
       </div>
     );
   }
@@ -923,7 +865,7 @@ function WorkoutExecution({ workout, onFinish, onCancel }: { workout: Workout; o
       <div className="flex items-start justify-between">
         <div>
           <p className="text-xs text-slate-400 font-display uppercase tracking-widest mb-0.5">Executando</p>
-          <h2 className="font-display font-bold text-xl text-white leading-tight">{workout.title}</h2>
+          <h2 className="font-display font-bold text-xl text-white leading-tight">{workout.titulo}</h2>
         </div>
         <div className="text-right">
           <p className="font-mono-data text-2xl text-green-400 font-bold">{formatDuration(elapsed)}</p>
@@ -934,7 +876,7 @@ function WorkoutExecution({ workout, onFinish, onCancel }: { workout: Workout; o
       {/* Progress bar */}
       <div>
         <div className="flex justify-between text-xs text-slate-400 mb-1.5">
-          <span>{checked.size} de {workout.exercises.length} exercícios</span>
+          <span>{checked.size} de {exercicios.length} exercícios</span>
           <span className="font-mono-data text-green-400">{pct}%</span>
         </div>
         <div className="h-2.5 rounded-full bg-[#163059] overflow-hidden">
@@ -947,40 +889,43 @@ function WorkoutExecution({ workout, onFinish, onCancel }: { workout: Workout; o
 
       {/* Exercise checklist */}
       <div className="space-y-2">
-        {workout.exercises.map((ex, i) => {
-          const isChecked = checked.has(ex.id);
-          const isExpanded = expanded === ex.id;
+        {exercicios.map((ex, i) => {
+          const isChecked = checked.has(i);
+          const isExpanded = expanded === i;
           return (
-            <div key={ex.id}
+            <div key={i}
               className={`rounded-xl border transition-all duration-200 overflow-hidden ${isChecked ? "border-green-400/40 bg-green-400/8" : "border-[#163059] bg-[#0f2040]/50"}`}>
               <div className="flex items-center gap-3 p-3">
                 {/* Checkbox */}
-                <button onClick={() => toggle(ex.id)}
+                <button onClick={() => toggle(i)}
                   className={`shrink-0 w-7 h-7 rounded-full border-2 flex items-center justify-center transition-all ${isChecked ? "border-green-400 bg-green-400" : "border-[#2a5499] bg-transparent hover:border-green-400/60"}`}>
                   {isChecked && <span className="text-black font-bold text-sm">✓</span>}
                 </button>
                 {/* Info */}
-                <div className="flex-1 min-w-0" onClick={() => setExpanded(isExpanded ? null : ex.id)}>
+                <div className="flex-1 min-w-0" onClick={() => setExpanded(isExpanded ? null : i)}>
                   <p className={`font-display font-semibold text-sm transition-colors ${isChecked ? "text-green-400 line-through decoration-green-400/50" : "text-white"}`}>
-                    <span className="text-slate-500 font-mono-data text-xs mr-1.5">{i + 1}.</span>{ex.name}
+                    <span className="text-slate-500 font-mono-data text-xs mr-1.5">{i + 1}.</span>{ex.nome}
                   </p>
                   <div className="flex gap-3 mt-0.5">
-                    <span className="text-xs text-slate-400"><span className="font-mono-data text-slate-300">{ex.sets}</span>×<span className="font-mono-data text-slate-300">{ex.reps}</span></span>
-                    <span className="text-xs text-slate-500">{ex.load}</span>
+                    <span className="text-xs text-slate-400"><span className="font-mono-data text-slate-300">{ex.series}</span>×<span className="font-mono-data text-slate-300">{ex.repeticoes}</span></span>
+                    {ex.carga && <span className="text-xs text-slate-500">{ex.carga}</span>}
                   </div>
                 </div>
-                <button onClick={() => setExpanded(isExpanded ? null : ex.id)} className="text-slate-500 hover:text-white transition-colors text-xs px-1">
+                <button onClick={() => setExpanded(isExpanded ? null : i)} className="text-slate-500 hover:text-white transition-colors text-xs px-1">
                   {isExpanded ? "▲" : "▼"}
                 </button>
               </div>
-              {/* Expanded detail */}
+              {/* Expanded detail — vídeo/foto de demonstração + observações */}
               {isExpanded && (
-                <div className="border-t border-[#163059]/60 flex gap-3 p-3">
-                  <img src={ex.image} alt={ex.name} className="w-28 h-20 rounded-lg object-cover bg-[#163059] shrink-0" />
-                  <div className="space-y-1.5">
-                    <p className="text-xs font-display font-semibold text-slate-300 uppercase tracking-wider">Dica do instrutor</p>
-                    <p className="text-sm text-slate-300 leading-relaxed italic">"{ex.tip}"</p>
-                  </div>
+                <div className="border-t border-[#163059]/60 p-3 space-y-2">
+                  <ExerciseMedia tipoMidia={ex.tipoMidia} urlMidia={ex.urlMidia} />
+                  <p className="text-xs text-slate-400">Descanso: <span className="text-slate-300 font-mono-data">{ex.descanso}</span></p>
+                  {ex.observacoes && (
+                    <div className="space-y-1">
+                      <p className="text-xs font-display font-semibold text-slate-300 uppercase tracking-wider">Observações</p>
+                      <p className="text-sm text-slate-300 leading-relaxed italic">"{ex.observacoes}"</p>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -1002,10 +947,34 @@ function WorkoutExecution({ workout, onFinish, onCancel }: { workout: Workout; o
 
 // ─── Workout History ──────────────────────────────────────────────────────────
 
-function WorkoutHistory() {
-  const thisWeek = WORKOUT_LOGS.filter((_, i) => i < 2).length;
-  const thisMonth = WORKOUT_LOGS.length;
-  const avgPct = Math.round(WORKOUT_LOGS.reduce((a, l) => a + Math.round((l.completedCount / l.totalCount) * 100), 0) / WORKOUT_LOGS.length);
+function WorkoutHistory({ alunoId }: { alunoId: string }) {
+  const { data: execucoes, loading } = useExecucoesTreino(alunoId);
+
+  const now = new Date();
+  const isSameDay = (a: Date, b: Date) => a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+  const daysAgo = (n: number) => { const d = new Date(now); d.setDate(d.getDate() - n); return d; };
+
+  const thisWeek = execucoes.filter((l) => (now.getTime() - new Date(l.data).getTime()) / 86400000 <= 7).length;
+  const thisMonth = execucoes.filter((l) => (now.getTime() - new Date(l.data).getTime()) / 86400000 <= 30).length;
+  const avgPct = execucoes.length === 0 ? 0 : Math.round(execucoes.reduce((a, l) => a + Math.round((l.exerciciosConcluidos / Math.max(l.totalExercicios, 1)) * 100), 0) / execucoes.length);
+
+  if (loading) return <p className="text-sm text-slate-500 py-10 text-center">Carregando histórico...</p>;
+
+  if (execucoes.length === 0) {
+    return (
+      <div className="space-y-5">
+        <div>
+          <p className="text-xs text-slate-400 font-display uppercase tracking-widest mb-1">Seu progresso</p>
+          <h1 className="font-display font-black text-3xl text-white">Histórico</h1>
+        </div>
+        <div className="flex flex-col items-center justify-center min-h-48 text-center space-y-3">
+          <span className="text-5xl">📋</span>
+          <h2 className="font-display font-bold text-lg text-white">Nenhum treino concluído ainda</h2>
+          <p className="text-slate-400 text-sm">Assim que você finalizar um treino, ele aparece aqui.</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-5">
@@ -1035,9 +1004,10 @@ function WorkoutHistory() {
         <p className="text-xs font-display text-slate-400 uppercase tracking-wider mb-3">Frequência – últimos 30 dias</p>
         <div className="flex flex-wrap gap-1.5">
           {Array.from({ length: 30 }, (_, i) => {
-            const hasTrained = [1, 4, 7, 11, 15, 18, 22, 26, 28].includes(i);
+            const day = daysAgo(29 - i);
+            const hasTrained = execucoes.some((l) => isSameDay(new Date(l.data), day));
             return (
-              <div key={i} title={`Dia ${30 - i}`}
+              <div key={i} title={day.toLocaleDateString("pt-BR")}
                 className={`w-6 h-6 rounded-md transition-colors ${hasTrained ? "bg-green-400" : "bg-[#163059]"}`} />
             );
           })}
@@ -1047,14 +1017,14 @@ function WorkoutHistory() {
 
       {/* Log list */}
       <div className="space-y-2">
-        {WORKOUT_LOGS.map((log) => {
-          const pct = Math.round((log.completedCount / log.totalCount) * 100);
+        {execucoes.map((log) => {
+          const pct = Math.round((log.exerciciosConcluidos / Math.max(log.totalExercicios, 1)) * 100);
           return (
             <div key={log.id} className="rounded-xl border border-[#163059] bg-[#0f2040]/50 p-4">
               <div className="flex items-start justify-between mb-2">
                 <div>
-                  <p className="font-display font-semibold text-white text-sm">{log.workoutTitle}</p>
-                  <p className="text-xs text-slate-400 mt-0.5 font-mono-data">{log.date} · {log.startTime}–{log.endTime}</p>
+                  <p className="font-display font-semibold text-white text-sm">{log.treinoTitulo}</p>
+                  <p className="text-xs text-slate-400 mt-0.5 font-mono-data">{new Date(log.data).toLocaleDateString("pt-BR")} · {log.horaInicio}–{log.horaFim}</p>
                 </div>
                 <span className={`font-mono-data text-sm font-bold ${pct === 100 ? "text-green-400" : "text-amber-400"}`}>{pct}%</span>
               </div>
@@ -1062,7 +1032,7 @@ function WorkoutHistory() {
                 <div className="flex-1 h-1.5 rounded-full bg-[#163059]">
                   <div className={`h-1.5 rounded-full ${pct === 100 ? "bg-green-400" : "bg-amber-400"}`} style={{ width: `${pct}%` }} />
                 </div>
-                <span className="text-xs text-slate-500 shrink-0 font-mono-data">{log.durationMin} min · {log.completedCount}/{log.totalCount}</span>
+                <span className="text-xs text-slate-500 shrink-0 font-mono-data">{log.duracaoMin} min · {log.exerciciosConcluidos}/{log.totalExercicios}</span>
               </div>
             </div>
           );
@@ -1074,9 +1044,18 @@ function WorkoutHistory() {
 
 // ─── My Subscription ──────────────────────────────────────────────────────────
 
-function MySubscription({ student }: { student: Student }) {
-  const planEmoji: Record<Plan, string> = { Mensal: "📅", Trimestral: "🗓️", Anual: "🏆" };
-  const daysLeft = 1; // demo: vencendo amanhã
+const ALUNO_STATUS_LABEL: Record<AlunoStatus, string> = {
+  ativo: "Em dia",
+  pendente: "Pendente",
+  vencido: "Vencido",
+  inativo: "Inativo",
+};
+
+const PLAN_EMOJI: Record<string, string> = { mensal: "📅", trimestral: "🗓️", anual: "🏆" };
+
+function MySubscription({ student }: { student: Aluno }) {
+  const emoji = PLAN_EMOJI[student.tipoPlano.toLowerCase()] ?? "💳";
+  const daysLeft = Math.ceil((new Date(student.dataVencimento).getTime() - Date.now()) / 86400000);
 
   return (
     <div className="space-y-5">
@@ -1086,18 +1065,19 @@ function MySubscription({ student }: { student: Student }) {
       </div>
 
       {/* Status card */}
-      <div className={`rounded-2xl border p-5 ${student.status === "Pago" ? "border-green-400/40 bg-green-400/5" : student.status === "Pendente" ? "border-amber-400/40 bg-amber-400/5" : "border-red-400/40 bg-red-400/5"}`}>
+      <div className={`rounded-2xl border p-5 ${student.status === "ativo" ? "border-green-400/40 bg-green-400/5" : student.status === "pendente" ? "border-amber-400/40 bg-amber-400/5" : "border-red-400/40 bg-red-400/5"}`}>
         <div className="flex items-center gap-3 mb-4">
-          <span className="text-4xl">{planEmoji[student.plan]}</span>
+          <span className="text-4xl">{emoji}</span>
           <div>
-            <p className="font-display font-black text-2xl text-white">Plano {student.plan}</p>
-            <Badge className={statusColors[student.status]}>{student.status}</Badge>
+            <p className="font-display font-black text-2xl text-white capitalize">Plano {student.tipoPlano}</p>
+            <Badge className={alunoStatusColorsDark[student.status] ?? alunoStatusColorsDark.inativo}>{ALUNO_STATUS_LABEL[student.status] ?? student.status}</Badge>
           </div>
         </div>
         <div className="space-y-2 text-sm">
           {[
-            ["Vencimento", student.dueDate],
-            ["Membro desde", student.since],
+            ["Vencimento", new Date(student.dataVencimento).toLocaleDateString("pt-BR")],
+            ["Membro desde", new Date(student.dataMatricula).toLocaleDateString("pt-BR")],
+            ["Valor", formatBRL(student.valorPlano)],
           ].map(([k, v]) => (
             <div key={k} className="flex justify-between">
               <span className="text-slate-400">{k}</span>
@@ -1108,28 +1088,24 @@ function MySubscription({ student }: { student: Student }) {
       </div>
 
       {/* Alert */}
-      {student.status === "Pendente" && (
+      {student.status === "pendente" && (
         <div className="rounded-xl border border-amber-400/30 bg-amber-400/8 p-4 flex gap-3">
           <span className="text-amber-400 text-xl shrink-0">⚠️</span>
           <div>
             <p className="font-display font-semibold text-amber-300 text-sm">Plano vencendo em breve</p>
-            <p className="text-xs text-slate-400 mt-0.5">Seu plano vence em <strong className="text-white">{daysLeft} dia</strong>. Renove para continuar treinando sem interrupção.</p>
+            <p className="text-xs text-slate-400 mt-0.5">Seu plano vence em <strong className="text-white">{Math.max(daysLeft, 0)} {Math.abs(daysLeft) === 1 ? "dia" : "dias"}</strong>. Renove para continuar treinando sem interrupção.</p>
           </div>
         </div>
       )}
-      {student.status === "Vencido" && (
+      {student.status === "vencido" && (
         <div className="rounded-xl border border-red-400/30 bg-red-400/8 p-4 flex gap-3">
           <span className="text-red-400 text-xl shrink-0">🔴</span>
           <div>
             <p className="font-display font-semibold text-red-300 text-sm">Plano vencido</p>
-            <p className="text-xs text-slate-400 mt-0.5">Seu acesso pode ser bloqueado. Regularize o pagamento agora.</p>
+            <p className="text-xs text-slate-400 mt-0.5">Seu acesso pode ser bloqueado. Regularize o pagamento na recepção.</p>
           </div>
         </div>
       )}
-
-      <button className="w-full py-4 rounded-2xl bg-green-500 hover:bg-green-400 active:scale-[0.98] text-black font-display font-black text-base transition-all shadow-lg shadow-green-500/20 flex items-center justify-center gap-2">
-        <span>💳</span> Renovar / Pagar Agora
-      </button>
 
       <div className="rounded-xl border border-[#163059] bg-[#0f2040]/50 p-4 space-y-3">
         <p className="text-xs font-display text-slate-400 uppercase tracking-wider">Benefícios do seu plano</p>
@@ -1137,8 +1113,8 @@ function MySubscription({ student }: { student: Student }) {
           "Acesso completo às instalações",
           "Treinos personalizados pelo instrutor",
           "Acompanhamento de progresso",
-          student.plan !== "Mensal" ? "Desconto por fidelidade" : null,
-          student.plan === "Anual" ? "2 meses bônus incluídos" : null,
+          student.tipoPlano.toLowerCase() !== "mensal" ? "Desconto por fidelidade" : null,
+          student.tipoPlano.toLowerCase() === "anual" ? "2 meses bônus incluídos" : null,
         ].filter(Boolean).map((b) => (
           <div key={b} className="flex items-center gap-2 text-sm text-slate-300">
             <span className="text-green-400 text-xs">✓</span> {b}
@@ -2003,52 +1979,331 @@ function StudentsCheckin({ onNavigate }: { onNavigate: (s: Screen) => void }) {
   );
 }
 
-const EMPTY_EXERCISE = { nome: "", series: "4", repeticoes: "12", carga: "" };
+const GRUPO_LABEL: Record<GrupoMuscular, string> = {
+  peito: "Peito", costas: "Costas", pernas: "Pernas", ombros: "Ombros", braços: "Braços", core: "Core", cardio: "Cardio", outro: "Outro",
+};
 
+const MAX_VIDEO_MB = 50;
+const MAX_FOTO_MB = 10;
+
+const EMPTY_EXERCICIO_FORM = { nome: "", grupoMuscular: "peito" as GrupoMuscular, descricao: "" };
+
+/** Biblioteca compartilhada de exercícios (CRUD + upload de vídeo/foto demonstrativa) — usada pelo "Montar Treino" para não recadastrar o mesmo exercício em todo treino. */
+function ExerciseLibrary() {
+  const { data: exercicios, loading, error } = useExerciciosBiblioteca();
+  const [showForm, setShowForm] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [form, setForm] = useState({ ...EMPTY_EXERCICIO_FORM });
+  const [mediaFile, setMediaFile] = useState<File | null>(null);
+  const [mediaPreviewUrl, setMediaPreviewUrl] = useState<string | null>(null);
+  const [existingMedia, setExistingMedia] = useState<{ tipoMidia?: string; urlMidia?: string }>({});
+  const [uploadPct, setUploadPct] = useState<number | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [formError, setFormError] = useState("");
+  const [search, setSearch] = useState("");
+  const [filterGrupo, setFilterGrupo] = useState<string>("");
+
+  const handleFile = (file: File | null) => {
+    setFormError("");
+    if (!file) return;
+    const isVideo = file.type.startsWith("video/");
+    const isImage = file.type.startsWith("image/");
+    if (!isVideo && !isImage) {
+      setFormError("Envie um vídeo (mp4/mov) ou uma foto (jpg/png).");
+      return;
+    }
+    const maxBytes = (isVideo ? MAX_VIDEO_MB : MAX_FOTO_MB) * 1024 * 1024;
+    if (file.size > maxBytes) {
+      setFormError(`Arquivo muito grande — máximo ${isVideo ? MAX_VIDEO_MB : MAX_FOTO_MB}MB para ${isVideo ? "vídeo" : "foto"}.`);
+      return;
+    }
+    setMediaFile(file);
+    setMediaPreviewUrl(URL.createObjectURL(file));
+  };
+
+  const resetForm = () => {
+    setForm({ ...EMPTY_EXERCICIO_FORM });
+    setMediaFile(null);
+    setMediaPreviewUrl(null);
+    setExistingMedia({});
+    setEditingId(null);
+    setUploadPct(null);
+    setFormError("");
+    setShowForm(false);
+  };
+
+  const startEdit = (ex: ExercicioBiblioteca) => {
+    setEditingId(ex.id);
+    setForm({ nome: ex.nome, grupoMuscular: ex.grupoMuscular, descricao: ex.descricao ?? "" });
+    setExistingMedia({ tipoMidia: ex.tipoMidia, urlMidia: ex.urlMidia });
+    setMediaFile(null);
+    setMediaPreviewUrl(null);
+    setFormError("");
+    setShowForm(true);
+  };
+
+  const handleSave = async () => {
+    setFormError("");
+    if (!form.nome.trim()) {
+      setFormError("Dê um nome ao exercício.");
+      return;
+    }
+    setSubmitting(true);
+    try {
+      let tipoMidia = existingMedia.tipoMidia;
+      let urlMidia = existingMedia.urlMidia;
+
+      if (mediaFile) {
+        const isVideo = mediaFile.type.startsWith("video/");
+        const storageRef = ref(storage, `${STORAGE_PATHS.exerciciosMidia}/${Date.now()}-${mediaFile.name}`);
+        await new Promise<void>((resolve, reject) => {
+          const task = uploadBytesResumable(storageRef, mediaFile);
+          task.on(
+            "state_changed",
+            (snap) => setUploadPct(Math.round((snap.bytesTransferred / snap.totalBytes) * 100)),
+            reject,
+            () => resolve()
+          );
+        });
+        urlMidia = await getDownloadURL(storageRef);
+        tipoMidia = isVideo ? "video" : "foto";
+      }
+
+      const payload = {
+        nome: form.nome.trim(),
+        grupoMuscular: form.grupoMuscular,
+        descricao: form.descricao.trim() || null,
+        tipoMidia: tipoMidia ?? null,
+        urlMidia: urlMidia ?? null,
+      };
+
+      if (editingId) {
+        await updateDoc(doc(db, COLLECTIONS.exerciciosBiblioteca, editingId), payload);
+      } else {
+        await addDoc(collection(db, COLLECTIONS.exerciciosBiblioteca), { ...payload, criadoEm: serverTimestamp() });
+      }
+      resetForm();
+    } catch (err) {
+      console.error("[exercicios] falha ao salvar exercício:", err);
+      setFormError("Não foi possível salvar o exercício. Verifique sua conexão.");
+    } finally {
+      setSubmitting(false);
+      setUploadPct(null);
+    }
+  };
+
+  const handleDelete = async (ex: ExercicioBiblioteca) => {
+    if (!window.confirm(`Excluir "${ex.nome}" da biblioteca? Treinos que já usam esse exercício continuam com os dados salvos.`)) return;
+    try {
+      await deleteDoc(doc(db, COLLECTIONS.exerciciosBiblioteca, ex.id));
+      if (ex.urlMidia) {
+        try { await deleteObject(ref(storage, ex.urlMidia)); } catch { /* mídia pode já não existir mais */ }
+      }
+    } catch (err) {
+      console.error("[exercicios] falha ao excluir exercício:", err);
+    }
+  };
+
+  const filtered = exercicios.filter(
+    (ex) => (!filterGrupo || ex.grupoMuscular === filterGrupo) && (!search.trim() || ex.nome.toLowerCase().includes(search.trim().toLowerCase()))
+  );
+
+  return (
+    <div className="space-y-6">
+      <SectionHeader title="Biblioteca de Exercícios" action={showForm ? undefined : "Criar Exercício"} onAction={() => setShowForm(true)} />
+      {error && (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+          Não foi possível carregar a biblioteca ({error}).
+        </div>
+      )}
+
+      {showForm && (
+        <div className="rounded-xl border border-green-200 bg-green-50/50 p-5 space-y-4">
+          <h3 className="font-display font-semibold text-gray-900">{editingId ? "Editar Exercício" : "Novo Exercício"}</h3>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <FormField label="Nome do exercício">
+              <input value={form.nome} onChange={(e) => setForm({ ...form, nome: e.target.value })} placeholder="Ex.: Supino Reto" className={inputClass} />
+            </FormField>
+            <FormField label="Grupo muscular">
+              <select value={form.grupoMuscular} onChange={(e) => setForm({ ...form, grupoMuscular: e.target.value as GrupoMuscular })} className={inputClass}>
+                {GRUPOS_MUSCULARES.map((g) => <option key={g} value={g}>{GRUPO_LABEL[g]}</option>)}
+              </select>
+            </FormField>
+          </div>
+          <FormField label="Descrição / instruções de execução (opcional)">
+            <textarea value={form.descricao} onChange={(e) => setForm({ ...form, descricao: e.target.value })} rows={3} placeholder="Como executar o movimento corretamente..." className={inputClass} />
+          </FormField>
+          <FormField label="Mídia demonstrativa (vídeo até 50MB ou foto até 10MB — opcional)">
+            <input type="file" accept="video/mp4,video/quicktime,image/jpeg,image/png" onChange={(e) => handleFile(e.target.files?.[0] ?? null)} className="text-sm text-gray-600" />
+            {uploadPct !== null && (
+              <div className="mt-2 h-2 rounded-full bg-gray-200 overflow-hidden">
+                <div className="h-2 rounded-full bg-green-500 transition-all" style={{ width: `${uploadPct}%` }} />
+              </div>
+            )}
+            {mediaPreviewUrl && (
+              mediaFile?.type.startsWith("video/")
+                ? <video src={mediaPreviewUrl} controls className="mt-2 max-h-48 rounded-lg bg-black" />
+                : <img src={mediaPreviewUrl} alt="Preview" className="mt-2 max-h-48 rounded-lg object-cover" />
+            )}
+            {!mediaPreviewUrl && existingMedia.urlMidia && (
+              existingMedia.tipoMidia === "video"
+                ? <video src={existingMedia.urlMidia} controls className="mt-2 max-h-48 rounded-lg bg-black" />
+                : <img src={existingMedia.urlMidia} alt="Mídia atual" className="mt-2 max-h-48 rounded-lg object-cover" />
+            )}
+          </FormField>
+          {formError && <p className="text-xs text-red-500">{formError}</p>}
+          <div className="flex gap-3">
+            <button onClick={handleSave} disabled={submitting} className="flex-1 py-2.5 rounded-lg bg-green-600 hover:bg-green-700 disabled:opacity-60 text-white font-display font-bold text-sm transition-colors shadow-sm">
+              {submitting ? "Salvando..." : "Salvar exercício"}
+            </button>
+            <button onClick={resetForm} className="px-5 py-2.5 rounded-lg border border-gray-300 text-gray-500 hover:text-gray-900 hover:border-gray-400 text-sm transition-colors">Cancelar</button>
+          </div>
+        </div>
+      )}
+
+      <div className="flex flex-col sm:flex-row gap-3">
+        <div className="relative flex-1">
+          <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"><Icon name="search" className="w-4 h-4" /></span>
+          <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Buscar exercício..." className="w-full bg-white border border-gray-300 rounded-lg pl-9 pr-3 py-2.5 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:border-green-500 focus:ring-2 focus:ring-green-500/20 transition-colors" />
+        </div>
+        <select value={filterGrupo} onChange={(e) => setFilterGrupo(e.target.value)} className={`sm:w-48 ${inputClass}`}>
+          <option value="">Todos os grupos</option>
+          {GRUPOS_MUSCULARES.map((g) => <option key={g} value={g}>{GRUPO_LABEL[g]}</option>)}
+        </select>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        {filtered.map((ex) => (
+          <div key={ex.id} className={`${cardClass} p-4 hover:shadow-md transition-shadow`}>
+            {ex.urlMidia && (
+              ex.tipoMidia === "video"
+                ? <video src={ex.urlMidia} className="w-full h-32 rounded-lg object-cover bg-black mb-3" muted />
+                : <img src={ex.urlMidia} alt={ex.nome} className="w-full h-32 rounded-lg object-cover mb-3" />
+            )}
+            <div className="flex items-start justify-between gap-2 mb-1">
+              <p className="font-display font-semibold text-gray-900 text-sm">{ex.nome}</p>
+              <Badge className="text-green-700 bg-green-50 border-green-200 shrink-0">{GRUPO_LABEL[ex.grupoMuscular]}</Badge>
+            </div>
+            {ex.descricao && <p className="text-xs text-gray-500 line-clamp-2 mb-3">{ex.descricao}</p>}
+            <div className="flex gap-2 mt-2">
+              <button onClick={() => startEdit(ex)} className="flex-1 flex items-center justify-center gap-1.5 text-xs px-3 py-2 rounded-lg border border-gray-300 hover:border-green-400 text-gray-600 hover:text-gray-900 transition-colors font-display font-medium">
+                <Icon name="edit" className="w-3.5 h-3.5" /> Editar
+              </button>
+              <button onClick={() => handleDelete(ex)} className="flex-1 flex items-center justify-center gap-1.5 text-xs px-3 py-2 rounded-lg border border-red-200 hover:bg-red-50 text-red-600 transition-colors font-display font-medium">
+                <Icon name="x" className="w-3.5 h-3.5" /> Excluir
+              </button>
+            </div>
+          </div>
+        ))}
+        {loading && <p className="text-sm text-gray-400 py-6 text-center md:col-span-2 lg:col-span-3">Carregando biblioteca...</p>}
+        {!loading && filtered.length === 0 && (
+          <div className="md:col-span-2 lg:col-span-3 rounded-xl border border-dashed border-gray-300 bg-gray-50 p-8 text-center text-gray-400 text-sm">
+            {exercicios.length === 0 ? "Nenhum exercício cadastrado ainda." : "Nenhum exercício encontrado com esse filtro."}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+interface BuilderExercicio extends Exercicio {
+  exercicioId?: string;
+}
+
+/** "Montar Treino" — combina exercícios da biblioteca com séries/reps/carga/descanso por treino, reordena e salva para um ou mais alunos. */
 function Workouts() {
   const { data: alunos } = useAlunos();
   const { data: treinos, loading: loadingTreinos, error: treinosError } = useTreinos();
+  const { data: biblioteca } = useExerciciosBiblioteca();
+
   const [showForm, setShowForm] = useState(false);
-  const [selectedAlunoId, setSelectedAlunoId] = useState("");
-  const [exercises, setExercises] = useState([{ ...EMPTY_EXERCISE }]);
   const [titulo, setTitulo] = useState("");
+  const [selectedAlunoIds, setSelectedAlunoIds] = useState<string[]>([]);
+  const [builderExercicios, setBuilderExercicios] = useState<BuilderExercicio[]>([]);
+  const [showPicker, setShowPicker] = useState(false);
+  const [pickerSearch, setPickerSearch] = useState("");
+  const [pickerGrupo, setPickerGrupo] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState("");
 
-  const updateExercise = (i: number, patch: Partial<typeof EMPTY_EXERCISE>) => {
-    setExercises(exercises.map((ex, xi) => (xi === i ? { ...ex, ...patch } : ex)));
+  const toggleAluno = (id: string) => {
+    setSelectedAlunoIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  };
+
+  const addFromLibrary = (ex: ExercicioBiblioteca) => {
+    setBuilderExercicios((prev) => [
+      ...prev,
+      { exercicioId: ex.id, nome: ex.nome, grupoMuscular: ex.grupoMuscular, tipoMidia: ex.tipoMidia, urlMidia: ex.urlMidia, series: 4, repeticoes: 12, carga: "", descanso: "60s", observacoes: "" },
+    ]);
+    setShowPicker(false);
+    setPickerSearch("");
+  };
+
+  const updateBuilderExercicio = (i: number, patch: Partial<BuilderExercicio>) => {
+    setBuilderExercicios((prev) => prev.map((ex, xi) => (xi === i ? { ...ex, ...patch } : ex)));
+  };
+
+  const removeBuilderExercicio = (i: number) => {
+    setBuilderExercicios((prev) => prev.filter((_, xi) => xi !== i));
+  };
+
+  const moveExercicio = (i: number, dir: -1 | 1) => {
+    setBuilderExercicios((prev) => {
+      const j = i + dir;
+      if (j < 0 || j >= prev.length) return prev;
+      const next = [...prev];
+      [next[i], next[j]] = [next[j], next[i]];
+      return next;
+    });
+  };
+
+  const resetForm = () => {
+    setTitulo("");
+    setSelectedAlunoIds([]);
+    setBuilderExercicios([]);
+    setFormError("");
+    setShowForm(false);
   };
 
   const handleSaveTreino = async () => {
     setFormError("");
-    const aluno = alunos.find((a) => a.id === selectedAlunoId);
-    const validExercises = exercises.filter((ex) => ex.nome.trim());
-    if (!aluno || !titulo || validExercises.length === 0) {
-      setFormError("Selecione o aluno, dê um título ao treino e preencha ao menos um exercício.");
+    if (!titulo.trim() || selectedAlunoIds.length === 0 || builderExercicios.length === 0) {
+      setFormError("Dê um título ao treino, selecione ao menos um aluno e adicione ao menos um exercício.");
       return;
     }
 
     setSubmitting(true);
     try {
-      await addDoc(collection(db, COLLECTIONS.alunos, aluno.id, COLLECTIONS.treinos), {
-        alunoId: aluno.id,
-        alunoNome: aluno.nome,
-        titulo,
-        criadoPor: auth.currentUser?.uid ?? null,
-        dataCriacao: new Date().toISOString(),
-        ativo: true,
-        exercicios: validExercises.map((ex) => ({
-          nome: ex.nome,
-          series: Number(ex.series) || 0,
-          repeticoes: Number(ex.repeticoes) || 0,
-          carga: ex.carga,
-          descanso: "60s",
-        })),
-      });
-      setShowForm(false);
-      setSelectedAlunoId("");
-      setTitulo("");
-      setExercises([{ ...EMPTY_EXERCISE }]);
+      const exerciciosOrdenados = builderExercicios.map((ex, i) => ({
+        exercicioId: ex.exercicioId ?? null,
+        nome: ex.nome,
+        grupoMuscular: ex.grupoMuscular ?? null,
+        tipoMidia: ex.tipoMidia ?? null,
+        urlMidia: ex.urlMidia ?? null,
+        series: Number(ex.series) || 0,
+        repeticoes: Number(ex.repeticoes) || 0,
+        carga: ex.carga || "",
+        descanso: ex.descanso || "60s",
+        observacoes: ex.observacoes || null,
+        ordem: i,
+      }));
+
+      await Promise.all(
+        selectedAlunoIds.map((alunoId) => {
+          const aluno = alunos.find((a) => a.id === alunoId);
+          if (!aluno) return null;
+          return addDoc(collection(db, COLLECTIONS.alunos, aluno.id, COLLECTIONS.treinos), {
+            alunoId: aluno.id,
+            alunoNome: aluno.nome,
+            titulo: titulo.trim(),
+            criadoPor: auth.currentUser?.uid ?? null,
+            dataCriacao: new Date().toISOString(),
+            ativo: true,
+            exercicios: exerciciosOrdenados,
+          });
+        })
+      );
+      resetForm();
     } catch (err) {
       console.error("[treinos] falha ao salvar treino:", err);
       setFormError("Não foi possível salvar o treino. Verifique sua conexão e se as regras do Firestore já foram mescladas.");
@@ -2057,9 +2312,13 @@ function Workouts() {
     }
   };
 
+  const pickerFiltered = biblioteca.filter(
+    (ex) => (!pickerGrupo || ex.grupoMuscular === pickerGrupo) && (!pickerSearch.trim() || ex.nome.toLowerCase().includes(pickerSearch.trim().toLowerCase()))
+  );
+
   return (
     <div className="space-y-6">
-      <SectionHeader title="Treinos" action={showForm ? undefined : "Adicionar Treino"} onAction={() => setShowForm(true)} />
+      <SectionHeader title="Treinos" action={showForm ? undefined : "Montar Treino"} onAction={() => setShowForm(true)} />
       {treinosError && (
         <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
           Não foi possível carregar os treinos do Firebase ({treinosError}).
@@ -2067,41 +2326,103 @@ function Workouts() {
       )}
       {showForm && (
         <div className="rounded-xl border border-green-200 bg-green-50/50 p-5 space-y-4">
-          <h3 className="font-display font-semibold text-gray-900">Novo Treino</h3>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <FormField label="Aluno">
-              <select value={selectedAlunoId} onChange={(e) => setSelectedAlunoId(e.target.value)} className={inputClass}>
-                <option value="">Selecionar aluno…</option>
-                {alunos.map((a) => <option key={a.id} value={a.id}>{a.nome}</option>)}
-              </select>
-            </FormField>
-            <FormField label="Título do Treino">
-              <input value={titulo} onChange={(e) => setTitulo(e.target.value)} placeholder="Ex.: Treino A – Peito" className={inputClass} />
-            </FormField>
-          </div>
+          <h3 className="font-display font-semibold text-gray-900">Montar Treino</h3>
+          <FormField label="Título do treino">
+            <input value={titulo} onChange={(e) => setTitulo(e.target.value)} placeholder="Ex.: Treino A – Peito e Tríceps" className={inputClass} />
+          </FormField>
+
+          <FormField label={`Alunos (${selectedAlunoIds.length} selecionado${selectedAlunoIds.length === 1 ? "" : "s"})`}>
+            <div className="max-h-40 overflow-y-auto rounded-lg border border-gray-300 bg-white divide-y divide-gray-100">
+              {alunos.map((a) => (
+                <label key={a.id} className="flex items-center gap-2.5 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 cursor-pointer">
+                  <input type="checkbox" checked={selectedAlunoIds.includes(a.id)} onChange={() => toggleAluno(a.id)} className="accent-green-600" />
+                  {a.nome}
+                </label>
+              ))}
+              {alunos.length === 0 && <p className="px-3 py-3 text-xs text-gray-400">Nenhum aluno cadastrado ainda.</p>}
+            </div>
+          </FormField>
+
           <div>
-            <label className="block text-xs font-display text-gray-500 uppercase tracking-wider mb-2">Exercícios</label>
+            <div className="flex items-center justify-between mb-2">
+              <label className="block text-xs font-display text-gray-500 uppercase tracking-wider">Exercícios do treino</label>
+              <button onClick={() => setShowPicker(true)} className="flex items-center gap-1.5 text-xs text-green-700 hover:text-green-800 font-medium">
+                <Icon name="plus" className="w-3.5 h-3.5" /> Adicionar exercício
+              </button>
+            </div>
+            {builderExercicios.length === 0 && (
+              <p className="text-xs text-gray-400 py-3 text-center border border-dashed border-gray-300 rounded-lg">Nenhum exercício adicionado ainda.</p>
+            )}
             <div className="space-y-2">
-              {exercises.map((ex, i) => (
-                <div key={i} className="grid grid-cols-[1fr_70px_70px_90px] gap-2">
-                  <input value={ex.nome} onChange={(e) => updateExercise(i, { nome: e.target.value })} placeholder="Ex.: Supino reto" className={inputClass} />
-                  <input value={ex.series} onChange={(e) => updateExercise(i, { series: e.target.value })} placeholder="Séries" className={inputClass} />
-                  <input value={ex.repeticoes} onChange={(e) => updateExercise(i, { repeticoes: e.target.value })} placeholder="Reps" className={inputClass} />
-                  <input value={ex.carga} onChange={(e) => updateExercise(i, { carga: e.target.value })} placeholder="Carga" className={inputClass} />
+              {builderExercicios.map((ex, i) => (
+                <div key={i} className="rounded-lg border border-gray-200 bg-white p-3">
+                  <div className="flex items-start gap-2 mb-2">
+                    <div className="flex flex-col shrink-0">
+                      <button onClick={() => moveExercicio(i, -1)} disabled={i === 0} className="text-gray-400 hover:text-gray-700 disabled:opacity-30 text-xs leading-none px-1">▲</button>
+                      <button onClick={() => moveExercicio(i, 1)} disabled={i === builderExercicios.length - 1} className="text-gray-400 hover:text-gray-700 disabled:opacity-30 text-xs leading-none px-1">▼</button>
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="font-display font-semibold text-gray-900 text-sm">{ex.nome}</p>
+                      {ex.grupoMuscular && <p className="text-[11px] text-gray-400">{GRUPO_LABEL[ex.grupoMuscular]}</p>}
+                    </div>
+                    <button onClick={() => removeBuilderExercicio(i)} className="text-gray-400 hover:text-red-600 transition-colors shrink-0"><Icon name="x" className="w-4 h-4" /></button>
+                  </div>
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                    <input type="number" value={ex.series} onChange={(e) => updateBuilderExercicio(i, { series: Number(e.target.value) })} placeholder="Séries" className={inputClass} />
+                    <input value={ex.repeticoes} onChange={(e) => updateBuilderExercicio(i, { repeticoes: Number(e.target.value) || 0 })} placeholder="Reps" className={inputClass} />
+                    <input value={ex.carga} onChange={(e) => updateBuilderExercicio(i, { carga: e.target.value })} placeholder="Carga (opcional)" className={inputClass} />
+                    <input value={ex.descanso} onChange={(e) => updateBuilderExercicio(i, { descanso: e.target.value })} placeholder="Descanso" className={inputClass} />
+                  </div>
+                  <input value={ex.observacoes ?? ""} onChange={(e) => updateBuilderExercicio(i, { observacoes: e.target.value })} placeholder="Observações (opcional)" className={`${inputClass} mt-2`} />
                 </div>
               ))}
             </div>
-            <button onClick={() => setExercises([...exercises, { ...EMPTY_EXERCISE }])} className="mt-2 text-xs text-green-700 hover:text-green-800 font-medium">+ adicionar exercício</button>
           </div>
+
           {formError && <p className="text-xs text-red-500">{formError}</p>}
           <div className="flex gap-3">
             <button onClick={handleSaveTreino} disabled={submitting} className="flex-1 py-2.5 rounded-lg bg-green-600 hover:bg-green-700 disabled:opacity-60 text-white font-display font-bold text-sm transition-colors shadow-sm">
               {submitting ? "Salvando..." : "Salvar Treino"}
             </button>
-            <button onClick={() => setShowForm(false)} className="px-5 py-2.5 rounded-lg border border-gray-300 text-gray-500 hover:text-gray-900 hover:border-gray-400 text-sm transition-colors">Cancelar</button>
+            <button onClick={resetForm} className="px-5 py-2.5 rounded-lg border border-gray-300 text-gray-500 hover:text-gray-900 hover:border-gray-400 text-sm transition-colors">Cancelar</button>
           </div>
         </div>
       )}
+
+      {showPicker && (
+        <Modal title="Adicionar exercício da biblioteca" onClose={() => setShowPicker(false)} wide>
+          <div className="flex flex-col sm:flex-row gap-2">
+            <input value={pickerSearch} onChange={(e) => setPickerSearch(e.target.value)} placeholder="Buscar exercício..." className={inputClass} />
+            <select value={pickerGrupo} onChange={(e) => setPickerGrupo(e.target.value)} className={`sm:w-44 ${inputClass}`}>
+              <option value="">Todos os grupos</option>
+              {GRUPOS_MUSCULARES.map((g) => <option key={g} value={g}>{GRUPO_LABEL[g]}</option>)}
+            </select>
+          </div>
+          <div className="max-h-80 overflow-y-auto space-y-1.5">
+            {pickerFiltered.map((ex) => (
+              <button key={ex.id} onClick={() => addFromLibrary(ex)} className="w-full flex items-center gap-3 p-2.5 rounded-lg border border-gray-200 hover:border-green-400 hover:bg-green-50/50 transition-colors text-left">
+                {ex.urlMidia ? (
+                  ex.tipoMidia === "video"
+                    ? <video src={ex.urlMidia} className="w-12 h-12 rounded-lg object-cover bg-black shrink-0" muted />
+                    : <img src={ex.urlMidia} alt={ex.nome} className="w-12 h-12 rounded-lg object-cover shrink-0" />
+                ) : (
+                  <span className="w-12 h-12 rounded-lg bg-gray-100 border border-gray-200 flex items-center justify-center text-gray-400 shrink-0"><Icon name="dumbbell" className="w-5 h-5" /></span>
+                )}
+                <div className="min-w-0">
+                  <p className="font-display font-semibold text-gray-900 text-sm truncate">{ex.nome}</p>
+                  <p className="text-xs text-gray-400">{GRUPO_LABEL[ex.grupoMuscular]}</p>
+                </div>
+              </button>
+            ))}
+            {pickerFiltered.length === 0 && (
+              <p className="text-sm text-gray-400 text-center py-6">
+                {biblioteca.length === 0 ? "Nenhum exercício cadastrado ainda — cadastre em \"Exercícios\" primeiro." : "Nenhum exercício encontrado com esse filtro."}
+              </p>
+            )}
+          </div>
+        </Modal>
+      )}
+
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {treinos.map((t) => {
           const aluno = alunos.find((a) => a.id === t.alunoId);
@@ -3063,6 +3384,7 @@ const ADMIN_NAV_GROUPS: { title: string; items: { id: Screen; label: string; ico
       { id: "dashboard", label: "Dashboard", icon: "dashboard" },
       { id: "checkin", label: "Alunos", icon: "users" },
       { id: "workouts", label: "Treinos", icon: "dumbbell" },
+      { id: "exercises", label: "Exercícios", icon: "clipboard-list" },
       { id: "camera", label: "Câmera", icon: "camera" },
     ],
   },
@@ -3211,6 +3533,7 @@ function AdminPanel({ onLogout }: { onLogout: () => void }) {
           {screen === "checkin" && <StudentsCheckin onNavigate={navigate} />}
           {screen === "register" && <RegisterStudent onBack={() => navigate("checkin")} />}
           {screen === "workouts" && <Workouts />}
+          {screen === "exercises" && <ExerciseLibrary />}
           {screen === "billing" && <Billing />}
           {screen === "audit" && <Audit />}
           {screen === "camera" && <CameraScreen />}
@@ -3225,7 +3548,7 @@ function AdminPanel({ onLogout }: { onLogout: () => void }) {
 
 export default function App() {
   const [mode, setMode] = useState<AppMode>("login");
-  const [activeStudent, setActiveStudent] = useState<Student | null>(null);
+  const [activeStudent, setActiveStudent] = useState<Aluno | null>(null);
 
   // Janela aberta no segundo monitor pelo botão "Abrir em outra tela" da tela
   // de Câmera — sem sidebar/login, só o feed + reconhecimento em tela cheia.
@@ -3233,14 +3556,14 @@ export default function App() {
     return <CameraKioskWindow />;
   }
 
-  const handleLogin = (m: AppMode, studentId?: number) => {
-    if (m === "student" && studentId) {
-      setActiveStudent(STUDENTS.find((s) => s.id === studentId) ?? null);
+  const handleLogin = (m: AppMode, aluno?: Aluno) => {
+    if (m === "student" && aluno) {
+      setActiveStudent(aluno);
     }
     setMode(m);
   };
 
-  const handleLogout = () => { setMode("login"); setActiveStudent(null); };
+  const handleLogout = () => { signOut(auth).catch(() => {}); setMode("login"); setActiveStudent(null); };
 
   if (mode === "login") return <LoginScreen onLogin={handleLogin} onGoToSignup={() => setMode("signup")} />;
   if (mode === "signup") return <CreateAccountScreen onCreated={() => setMode("admin")} onBack={() => setMode("login")} />;

@@ -53,6 +53,10 @@ export const COLLECTIONS = {
   planos: `${FS_PREFIX}planos`,
   notificacoes: `${FS_PREFIX}notificacoes`,
   logsAuditoria: `${FS_PREFIX}logsAuditoria`,
+  // Biblioteca de exercícios compartilhada entre todos os treinos — coleção
+  // de nível raiz (não aninhada em alunos/{id}), então um exercício só
+  // precisa ser cadastrado uma vez e é reutilizado em quantos treinos quiser.
+  exerciciosBiblioteca: `${FS_PREFIX}exerciciosBiblioteca`,
   // Subcoleções de alunos/{alunoId}/... — prefixadas mesmo sendo aninhadas,
   // porque collectionGroup() casa pelo nome da coleção no banco INTEIRO,
   // não pelo caminho do pai. Um nome genérico aqui colidiria com qualquer
@@ -65,6 +69,7 @@ export const STORAGE_PATHS = {
   fotosAlunos: `${STORAGE_PREFIX}/fotos-alunos`,
   checkinsFotos: `${STORAGE_PREFIX}/checkins-fotos`,
   documentosAcademia: `${STORAGE_PREFIX}/documentos-academia`,
+  exerciciosMidia: `${STORAGE_PREFIX}/exercicios-midia`,
 } as const;
 
 /**

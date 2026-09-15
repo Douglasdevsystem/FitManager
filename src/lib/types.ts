@@ -39,13 +39,41 @@ export interface Checkin {
   dispositivoId?: string;
 }
 
-export interface Exercicio {
+export type GrupoMuscular = "peito" | "costas" | "pernas" | "ombros" | "braços" | "core" | "cardio" | "outro";
+
+export const GRUPOS_MUSCULARES: GrupoMuscular[] = ["peito", "costas", "pernas", "ombros", "braços", "core", "cardio", "outro"];
+
+export type TipoMidiaExercicio = "video" | "foto";
+
+/** Exercício cadastrado na biblioteca compartilhada (fitmanager_exerciciosBiblioteca), reutilizável em qualquer treino. */
+export interface ExercicioBiblioteca {
+  id: string;
   nome: string;
+  grupoMuscular: GrupoMuscular;
+  descricao?: string;
+  tipoMidia?: TipoMidiaExercicio;
+  urlMidia?: string;
+  criadoEm?: unknown;
+}
+
+/**
+ * Exercício dentro de um treino específico — referencia (quando veio da
+ * biblioteca) o ExercicioBiblioteca original via exercicioId, mas denormaliza
+ * nome/grupoMuscular/mídia para exibir sem lookup extra. Treinos antigos
+ * (criados antes da biblioteca existir) não têm exercicioId/grupoMuscular/mídia.
+ */
+export interface Exercicio {
+  exercicioId?: string;
+  nome: string;
+  grupoMuscular?: GrupoMuscular;
+  tipoMidia?: TipoMidiaExercicio;
+  urlMidia?: string;
   series: number;
   repeticoes: number;
   carga: string;
   descanso: string;
   observacoes?: string;
+  ordem?: number;
 }
 
 export interface Treino {
@@ -57,6 +85,19 @@ export interface Treino {
   dataCriacao: string; // ISO datetime
   ativo: boolean;
   exercicios: Exercicio[];
+}
+
+export interface ExecucaoTreino {
+  id: string;
+  treinoId: string;
+  treinoTitulo: string;
+  data: string; // ISO datetime da conclusão
+  horaInicio: string;
+  horaFim: string;
+  duracaoMin: number;
+  exerciciosConcluidos: number;
+  totalExercicios: number;
+  criadoEm?: unknown;
 }
 
 export type UsuarioPerfil = "administrador" | "personal" | "aluno";
