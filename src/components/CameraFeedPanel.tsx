@@ -125,34 +125,14 @@ export function CameraFeedPanel({ fullscreen = false }: { fullscreen?: boolean }
   }, [box]);
 
   return (
-    <div className={`relative w-full ${fullscreen ? "h-screen bg-black" : "aspect-video bg-gray-900 rounded-xl overflow-hidden"}`}>
-      <video ref={videoRef} autoPlay muted playsInline className="absolute inset-0 w-full h-full object-cover scale-x-[-1]" />
-      <canvas ref={canvasRef} className="absolute inset-0 w-full h-full scale-x-[-1] pointer-events-none" />
-
-      {cameraError && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-gray-900 text-red-400 text-sm px-6 text-center">
-          {cameraError}
-        </div>
-      )}
-
-      {!cameraError && (!cameraReady || !modelsReady) && (
-        <div className="absolute inset-0 flex items-center justify-center bg-gray-900/80 text-white text-sm">
-          {!cameraReady ? "Iniciando câmera..." : "Carregando modelos de reconhecimento..."}
-        </div>
-      )}
-
-      {modelsError && (
-        <div className="absolute top-3 left-3 right-3 bg-red-600/90 text-white text-xs rounded-lg px-3 py-2">{modelsError}</div>
-      )}
-
-      <RecognitionOverlay event={overlayEvent} />
-
+    <div className="w-full space-y-2">
       {!fullscreen && devices.length > 1 && (
-        <div className="absolute top-3 right-3">
+        <div className="flex items-center gap-2.5">
+          <label className="text-xs font-display text-gray-500 uppercase tracking-wider">Câmera</label>
           <select
             value={deviceId}
             onChange={(e) => setDeviceId(e.target.value)}
-            className="bg-black/60 text-white text-xs rounded-lg border border-white/20 px-2 py-1.5 backdrop-blur-sm"
+            className="bg-white border border-gray-300 rounded-lg px-2.5 py-1.5 text-sm text-gray-900 focus:outline-none focus:border-green-500 focus:ring-2 focus:ring-green-500/20 transition-colors"
           >
             <option value="">Câmera padrão</option>
             {devices.map((d, i) => (
@@ -162,8 +142,46 @@ export function CameraFeedPanel({ fullscreen = false }: { fullscreen?: boolean }
         </div>
       )}
 
-      <div className="absolute bottom-3 left-3 bg-black/60 backdrop-blur-sm rounded-lg px-3 py-1.5 text-xs text-white/80 font-mono-data">
-        {alunos.length} aluno(s) sincronizado(s)
+      <div className={`relative w-full ${fullscreen ? "h-screen bg-black" : "aspect-video bg-gray-900 rounded-xl overflow-hidden"}`}>
+        <video ref={videoRef} autoPlay muted playsInline className="absolute inset-0 w-full h-full object-cover scale-x-[-1]" />
+        <canvas ref={canvasRef} className="absolute inset-0 w-full h-full scale-x-[-1] pointer-events-none" />
+
+        {cameraError && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-gray-900 text-red-400 text-sm px-6 text-center">
+            {cameraError}
+          </div>
+        )}
+
+        {!cameraError && (!cameraReady || !modelsReady) && (
+          <div className="absolute inset-0 flex items-center justify-center bg-gray-900/80 text-white text-sm">
+            {!cameraReady ? "Iniciando câmera..." : "Carregando modelos de reconhecimento..."}
+          </div>
+        )}
+
+        {modelsError && (
+          <div className="absolute top-3 left-3 right-3 bg-red-600/90 text-white text-xs rounded-lg px-3 py-2">{modelsError}</div>
+        )}
+
+        <RecognitionOverlay event={overlayEvent} />
+
+        {fullscreen && devices.length > 1 && (
+          <div className="absolute top-3 right-3">
+            <select
+              value={deviceId}
+              onChange={(e) => setDeviceId(e.target.value)}
+              className="bg-black/60 text-white text-xs rounded-lg border border-white/20 px-2 py-1.5 backdrop-blur-sm"
+            >
+              <option value="">Câmera padrão</option>
+              {devices.map((d, i) => (
+                <option key={d.deviceId} value={d.deviceId}>{d.label || `Câmera ${i + 1}`}</option>
+              ))}
+            </select>
+          </div>
+        )}
+
+        <div className="absolute bottom-3 left-3 bg-black/60 backdrop-blur-sm rounded-lg px-3 py-1.5 text-xs text-white/80 font-mono-data">
+          {alunos.length} aluno(s) sincronizado(s)
+        </div>
       </div>
     </div>
   );
