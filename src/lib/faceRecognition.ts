@@ -9,16 +9,24 @@ import type { Aluno } from "./types";
 let modelsLoaded = false;
 let loadingPromise: Promise<void> | null = null;
 
-/** Loads the face-api.js models from /public/models (served as /models). Safe to call repeatedly. */
+/**
+ * Loads the face-api.js models from /public/models (served as /models).
+ * Safe to call repeatedly. Runs entirely offline once loaded — detection and
+ * matching never touch the network again (no Firebase involved in the loop).
+ * The 3 model files are fetched in parallel instead of one after another,
+ * and Vercel serves /models with a long-lived immutable cache (see
+ * vercel.json), so this download only really happens once per browser.
+ */
 export async function loadFaceModels(): Promise<void> {
   if (modelsLoaded) return;
   if (loadingPromise) return loadingPromise;
-  loadingPromise = (async () => {
-    await faceapi.nets.tinyFaceDetector.loadFromUri("/models");
-    await faceapi.nets.faceLandmark68Net.loadFromUri("/models");
-    await faceapi.nets.faceRecognitionNet.loadFromUri("/models");
+  loadingPromise = Promise.all([
+    faceapi.nets.tinyFaceDetector.loadFromUri("/models"),
+    faceapi.nets.faceLandmark68Net.loadFromUri("/models"),
+    faceapi.nets.faceRecognitionNet.loadFromUri("/models"),
+  ]).then(() => {
     modelsLoaded = true;
-  })();
+  });
   return loadingPromise;
 }
 
