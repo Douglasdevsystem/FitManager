@@ -25,7 +25,13 @@ export function useFaceRecognition({
   videoRef,
   alunos,
   active,
-  threshold = 0.6,
+  // 0.6 is face-api.js's own example/demo threshold — fine for "does this
+  // look like roughly the same person" but too loose for access control,
+  // where a false match means letting the wrong person in. 0.5 trades a few
+  // more "não reconhecido" denials (person has to look straight at the
+  // camera, decent lighting) for far fewer wrong-person approvals, which is
+  // the right tradeoff for a door/turnstile use case.
+  threshold = 0.5,
   cooldownMs = 8000,
   intervalMs = 700,
   onEvent,
@@ -72,6 +78,7 @@ export function useFaceRecognition({
         setBox(face.box);
 
         const match = findBestMatch(face.embedding, alunos, threshold);
+        console.log(`[useFaceRecognition] distância: ${match.distance.toFixed(3)} (limite ${threshold}) → ${match.matched ? `match: ${match.aluno?.nome}` : "sem match"}`);
         const key = match.aluno?.id ?? "denied";
         const now = Date.now();
         if (lastEventRef.current.key !== key || now - lastEventRef.current.at > cooldownMs) {

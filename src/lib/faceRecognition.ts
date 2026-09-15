@@ -34,12 +34,29 @@ export interface DetectedFace {
   box: FaceBox;
 }
 
-/** Detects the single most prominent face in a live <video> element. */
+/**
+ * Detects the face closest to the camera in a live <video> element.
+ *
+ * Deliberately uses detectAllFaces + picks the LARGEST bounding box instead
+ * of face-api.js's own detectSingleFace, which picks the highest-*confidence*
+ * detection — not necessarily the person actually standing in front of the
+ * camera. At a real entrance, other people walking by in the background are
+ * a normal occurrence; without this, a bystander's face can end up being
+ * the one that gets matched (and checked in) instead of whoever is actually
+ * trying to get in. The closest face to the camera is reliably the largest
+ * one in frame, so "biggest box wins" is the right heuristic here.
+ */
 export async function detectFace(video: HTMLVideoElement): Promise<DetectedFace | null> {
   const options = new faceapi.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.5 });
-  const result = await faceapi.detectSingleFace(video, options).withFaceLandmarks().withFaceDescriptor();
-  if (!result) return null;
-  return { embedding: Array.from(result.descriptor), box: result.detection.box };
+  const results = await faceapi.detectAllFaces(video, options).withFaceLandmarks().withFaceDescriptors();
+  if (results.length === 0) return null;
+
+  const closest = results.reduce((largest, current) =>
+    current.detection.box.width * current.detection.box.height > largest.detection.box.width * largest.detection.box.height
+      ? current
+      : largest
+  );
+  return { embedding: Array.from(closest.descriptor), box: closest.detection.box };
 }
 
 export function euclideanDistance(a: number[], b: number[]): number {
