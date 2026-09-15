@@ -1,0 +1,10 @@
+{
+  "description": "Manage gym memberships and training sessions with ease through a user-friendly platform for administrators, trainers, and clients, ensuring seamless check-ins and automated billing.",
+  "robots": {
+    "index": false
+  },
+  "accessibility": {
+    "addBypassLinks": false,
+    "ignoreReducedMotion": false
+  }
+}

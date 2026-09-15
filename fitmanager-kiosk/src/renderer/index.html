@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <title>FitManager Kiosk</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="kiosk">
+      <header class="kiosk__brand">
+        <span class="kiosk__logo">F</span>
+        <span>FitManager · Controle de Acesso</span>
+      </header>
+
+      <div class="kiosk__camera">
+        <video id="video" autoplay muted playsinline></video>
+        <canvas id="overlay"></canvas>
+        <div id="status" class="status status--idle">
+          <p id="statusText">Carregando...</p>
+        </div>
+      </div>
+
+      <div id="matchCard" class="match-card" hidden>
+        <img id="matchPhoto" alt="" />
+        <div>
+          <p id="matchName" class="match-card__name"></p>
+          <p id="matchMeta" class="match-card__meta">Acesso liberado</p>
+        </div>
+      </div>
+
+      <footer class="kiosk__footer">
+        <span id="cacheInfo">Sincronizando alunos...</span>
+      </footer>
+    </main>
+
+    <!-- face-api.js browser build, instalado via "npm install" (node_modules) -->
+    <script src="../../node_modules/face-api.js/dist/face-api.min.js"></script>
+    <script src="../face-engine/compare.js"></script>
+    <script src="face-detector.js"></script>
+    <script src="renderer.js"></script>
+  </body>
+</html>

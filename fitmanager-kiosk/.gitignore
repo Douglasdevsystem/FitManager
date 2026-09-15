@@ -1,0 +1,20 @@
+node_modules/
+dist/
+out/
+
+# Secrets — never commit these
+.env
+firebase-service-account.json
+
+# Downloaded automatically by scripts/download-models.js
+models/*
+!models/.gitkeep
+
+# Runtime local cache (regenerated from Firestore)
+src/cache/*.json
+!src/cache/.gitkeep
+
+functions/node_modules/
+functions/.env
+functions/models/*
+!functions/models/.gitkeep

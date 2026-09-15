@@ -1,0 +1,37 @@
+// ⚠️ NÃO faça `firebase deploy --only storage` com este arquivo sozinho.
+//
+// Mesmo aviso do firestore.rules: este projeto Firebase já tem outro sistema
+// publicado com suas próprias Storage Rules. Copie o bloco abaixo para
+// dentro do storage.rules já existente do projeto appfood-e25bb — todo
+// caminho já está sob o prefixo "fitmanager/", então não deveria colidir
+// com nada que já exista.
+//
+// rules_version = '2';
+// service firebase.storage {
+//   match /b/{bucket}/o {
+//
+//     ...regras existentes do appfood aqui, sem mexer...
+//
+//     <<< COLE DAQUI PARA BAIXO >>>
+
+    match /fitmanager/fotos-alunos/{alunoId}.jpg {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null
+                    && request.resource.size < 5 * 1024 * 1024
+                    && request.resource.contentType.matches('image/.*');
+    }
+
+    match /fitmanager/checkins-fotos/{checkinId}.jpg {
+      // Gravado pelo kiosk via Admin SDK — client não precisa escrever aqui.
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
+
+    match /fitmanager/documentos-academia/{fileName} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null;
+    }
+
+//     <<< COLE ATÉ AQUI >>>
+//   }
+// }

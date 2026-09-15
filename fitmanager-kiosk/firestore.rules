@@ -1,0 +1,99 @@
+// ⚠️ NÃO faça `firebase deploy --only firestore:rules` com este arquivo sozinho.
+//
+// Este projeto Firebase (appfood-e25bb) já tem outro sistema publicado com
+// suas próprias regras. Firestore só aceita UM arquivo de regras por projeto
+// — publicar este arquivo como está SUBSTITUIRIA (apagaria) as regras do
+// outro sistema.
+//
+// Como usar: copie o conteúdo de dentro de `match /databases/{database}/documents { ... }`
+// abaixo e COLE dentro do `match /databases/{database}/documents { ... }` já
+// existente no firestore.rules do projeto appfood-e25bb, junto das regras
+// que já estão lá. Todos os nomes (coleções e funções) já têm o prefixo
+// "fitmanager" — não deveria colidir com nada que já exista.
+//
+// rules_version = '2';
+// service cloud.firestore {
+//   match /databases/{database}/documents {
+//
+//     ...regras existentes do appfood aqui, sem mexer...
+//
+//     <<< COLE DAQUI PARA BAIXO >>>
+
+    function fitmanagerIsSignedIn() {
+      return request.auth != null;
+    }
+
+    function fitmanagerIsAdmin() {
+      return fitmanagerIsSignedIn() &&
+        get(/databases/$(database)/documents/fitmanager_usuarios/$(request.auth.uid)).data.perfil == "administrador";
+    }
+
+    function fitmanagerIsPersonal() {
+      return fitmanagerIsSignedIn() &&
+        get(/databases/$(database)/documents/fitmanager_usuarios/$(request.auth.uid)).data.perfil == "personal";
+    }
+
+    function fitmanagerIsOwnerAluno(alunoId) {
+      return fitmanagerIsSignedIn() &&
+        get(/databases/$(database)/documents/fitmanager_usuarios/$(request.auth.uid)).data.alunoId == alunoId;
+    }
+
+    match /fitmanager_alunos/{alunoId} {
+      allow read: if fitmanagerIsAdmin() || fitmanagerIsPersonal() || fitmanagerIsOwnerAluno(alunoId);
+      allow write: if fitmanagerIsAdmin() || fitmanagerIsPersonal();
+
+      // Nomes de subcoleção prefixados (não "treinos"/"execucoesTreino" puros)
+      // porque collectionGroup() casa pelo nome da coleção no banco INTEIRO,
+      // não pelo caminho do pai — um nome genérico colidiria com qualquer
+      // subcoleção de mesmo nome do outro sistema.
+      match /fitmanager_Treinos/{treinoId} {
+        allow read: if fitmanagerIsAdmin() || fitmanagerIsPersonal() || fitmanagerIsOwnerAluno(alunoId);
+        allow write: if fitmanagerIsAdmin() || fitmanagerIsPersonal();
+      }
+
+      match /fitmanager_ExecucoesTreino/{execucaoId} {
+        allow read: if fitmanagerIsAdmin() || fitmanagerIsPersonal() || fitmanagerIsOwnerAluno(alunoId);
+        allow write: if fitmanagerIsOwnerAluno(alunoId) || fitmanagerIsAdmin() || fitmanagerIsPersonal();
+      }
+    }
+
+    match /fitmanager_checkins/{checkinId} {
+      allow read: if fitmanagerIsAdmin() || fitmanagerIsPersonal();
+      // Gravado tanto pelo kiosk (Admin SDK, ignora estas regras) quanto pela
+      // tela de Câmera do painel web (client SDK, precisa de um usuário
+      // autenticado da equipe). Nunca editável/deletável depois de criado.
+      allow create: if fitmanagerIsAdmin() || fitmanagerIsPersonal();
+      allow update, delete: if false;
+    }
+
+    match /fitmanager_usuarios/{uid} {
+      allow read: if fitmanagerIsSignedIn() && (request.auth.uid == uid || fitmanagerIsAdmin());
+      // O próprio usuário pode criar seu perfil no cadastro (bootstrap: o
+      // primeiro admin de uma academia ainda não é admin de ninguém quando
+      // se cadastra). Só um admin já existente pode editar/desativar depois.
+      allow create: if fitmanagerIsSignedIn() && request.auth.uid == uid;
+      allow update, delete: if fitmanagerIsAdmin();
+    }
+
+    match /fitmanager_planos/{planoId} {
+      allow read: if fitmanagerIsSignedIn();
+      allow write: if fitmanagerIsAdmin();
+    }
+
+    match /fitmanager_notificacoes/{id} {
+      allow read: if fitmanagerIsAdmin() || fitmanagerIsPersonal();
+      allow write: if false; // só Cloud Functions / dispatcher (Admin SDK)
+    }
+
+    match /fitmanager_notificacoesPendentes/{id} {
+      allow read, write: if false; // uso interno do disparador de WhatsApp (Admin SDK)
+    }
+
+    match /fitmanager_logsAuditoria/{id} {
+      allow read: if fitmanagerIsAdmin();
+      allow write: if false; // só Cloud Functions (Admin SDK)
+    }
+
+//     <<< COLE ATÉ AQUI >>>
+//   }
+// }

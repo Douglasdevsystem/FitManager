@@ -1,0 +1,34 @@
+{
+  "name": "fitmanager-kiosk",
+  "version": "1.0.0",
+  "private": true,
+  "description": "FitManager - app desktop (Electron) de controle de acesso por reconhecimento facial",
+  "main": "src/main/main.js",
+  "scripts": {
+    "start": "node scripts/download-models.js && electron .",
+    "setup:models": "node scripts/download-models.js",
+    "postinstall": "node scripts/download-models.js || echo Modelos serao baixados na primeira execucao (npm start)",
+    "build": "electron-builder"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "face-api.js": "^0.22.2",
+    "firebase-admin": "^12.7.0"
+  },
+  "devDependencies": {
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.fitmanager.kiosk",
+    "productName": "FitManager Kiosk",
+    "files": [
+      "src/**/*",
+      "package.json",
+      "node_modules/face-api.js/dist/face-api.min.js"
+    ],
+    "extraResources": [
+      { "from": "models", "to": "models" }
+    ]
+  }
+}
