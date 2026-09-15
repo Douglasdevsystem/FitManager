@@ -1990,6 +1990,7 @@ const EMPTY_EXERCICIO_FORM = { nome: "", grupoMuscular: "peito" as GrupoMuscular
 
 /** Biblioteca compartilhada de exercícios (CRUD + upload de vídeo/foto demonstrativa) — usada pelo "Montar Treino" para não recadastrar o mesmo exercício em todo treino. */
 function ExerciseLibrary() {
+  const mediaFileRef = useRef<HTMLInputElement>(null);
   const { data: exercicios, loading, error } = useExerciciosBiblioteca();
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -2134,7 +2135,11 @@ function ExerciseLibrary() {
             <textarea value={form.descricao} onChange={(e) => setForm({ ...form, descricao: e.target.value })} rows={3} placeholder="Como executar o movimento corretamente..." className={inputClass} />
           </FormField>
           <FormField label="Mídia demonstrativa (vídeo até 50MB ou foto até 10MB — opcional)">
-            <input type="file" accept="video/mp4,video/quicktime,image/jpeg,image/png" onChange={(e) => handleFile(e.target.files?.[0] ?? null)} className="text-sm text-gray-600" />
+            <input ref={mediaFileRef} type="file" accept="video/mp4,video/quicktime,image/jpeg,image/png" onChange={(e) => handleFile(e.target.files?.[0] ?? null)} className="hidden" />
+            <button onClick={() => mediaFileRef.current?.click()} type="button" className="w-full flex items-center justify-center gap-2 px-4 py-6 rounded-lg border-2 border-dashed border-gray-300 hover:border-green-400 hover:bg-green-50/40 text-sm text-gray-500 hover:text-green-700 transition-colors">
+              <Icon name="upload" className="w-5 h-5" />
+              {mediaFile ? mediaFile.name : "Clique para enviar um vídeo ou foto"}
+            </button>
             {uploadPct !== null && (
               <div className="mt-2 h-2 rounded-full bg-gray-200 overflow-hidden">
                 <div className="h-2 rounded-full bg-green-500 transition-all" style={{ width: `${uploadPct}%` }} />
