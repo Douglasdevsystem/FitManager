@@ -127,6 +127,10 @@ function formatBRL(value: number) {
   return value.toLocaleString("pt-BR", { style: "currency", currency: "BRL", maximumFractionDigits: 0 });
 }
 
+function formatNota(pct: number) {
+  return (pct / 10).toFixed(1);
+}
+
 // ─── Icons (outline, admin screens only) ───────────────────────────────────────
 
 type IconName =
@@ -834,7 +838,7 @@ function WorkoutExecution({ workout, onFinish, onCancel }: { workout: Treino; on
       <div className="flex flex-col items-center justify-center min-h-64 text-center space-y-6 py-8">
         <div className="relative">
           <div className="w-28 h-28 rounded-full border-4 border-green-400 flex items-center justify-center shadow-xl shadow-green-400/20">
-            <span className="font-display font-black text-4xl text-green-400">{pct}%</span>
+            <span className="font-display font-black text-4xl text-green-400">{formatNota(pct)}</span>
           </div>
           {pct === 100 && <span className="absolute -top-2 -right-2 text-3xl">🎉</span>}
         </div>
@@ -846,7 +850,7 @@ function WorkoutExecution({ workout, onFinish, onCancel }: { workout: Treino; on
           {[
             { label: "Duração", value: formatDuration(elapsed) },
             { label: "Concluídos", value: `${checked.size}/${exercicios.length}` },
-            { label: "Progresso", value: `${pct}%` },
+            { label: "Progresso", value: formatNota(pct) },
           ].map((s) => (
             <div key={s.label} className="rounded-xl border border-[#163059] bg-[#0f2040]/60 p-3 text-center">
               <p className="font-display font-bold text-white text-lg">{s.value}</p>
@@ -877,7 +881,7 @@ function WorkoutExecution({ workout, onFinish, onCancel }: { workout: Treino; on
       <div>
         <div className="flex justify-between text-xs text-slate-400 mb-1.5">
           <span>{checked.size} de {exercicios.length} exercícios</span>
-          <span className="font-mono-data text-green-400">{pct}%</span>
+          <span className="font-mono-data text-green-400">{formatNota(pct)}</span>
         </div>
         <div className="h-2.5 rounded-full bg-[#163059] overflow-hidden">
           <div
@@ -994,7 +998,7 @@ function WorkoutHistory({ alunoId }: { alunoId: string }) {
           <p className="text-xs text-slate-400 mt-0.5">este mês</p>
         </div>
         <div className="rounded-xl border border-green-400/30 bg-green-400/5 p-3 text-center">
-          <p className="font-display font-bold text-2xl text-green-400">{avgPct}%</p>
+          <p className="font-display font-bold text-2xl text-green-400">{formatNota(avgPct)}</p>
           <p className="text-xs text-slate-400 mt-0.5">média conclusão</p>
         </div>
       </div>
@@ -1026,7 +1030,7 @@ function WorkoutHistory({ alunoId }: { alunoId: string }) {
                   <p className="font-display font-semibold text-white text-sm">{log.treinoTitulo}</p>
                   <p className="text-xs text-slate-400 mt-0.5 font-mono-data">{new Date(log.data).toLocaleDateString("pt-BR")} · {log.horaInicio}–{log.horaFim}</p>
                 </div>
-                <span className={`font-mono-data text-sm font-bold ${pct === 100 ? "text-green-400" : "text-amber-400"}`}>{pct}%</span>
+                <span className={`font-mono-data text-sm font-bold ${pct === 100 ? "text-green-400" : "text-amber-400"}`}>{formatNota(pct)}</span>
               </div>
               <div className="flex items-center gap-3">
                 <div className="flex-1 h-1.5 rounded-full bg-[#163059]">
