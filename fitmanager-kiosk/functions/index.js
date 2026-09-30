@@ -13,10 +13,15 @@ const db = admin.firestore();
 const PREFIX = process.env.FIRESTORE_PREFIX || "fitmanager_";
 const COL = {
   alunos: `${PREFIX}alunos`,
+  usuarios: `${PREFIX}usuarios`,
   checkins: `${PREFIX}checkins`,
   notificacoesPendentes: `${PREFIX}notificacoesPendentes`,
   logsAuditoria: `${PREFIX}logsAuditoria`,
 };
+
+// Quest: desafios de passatempo entre alunos (ver quest.js).
+const quest = require("./quest").criarQuest(PREFIX);
+Object.assign(exports, quest);
 
 /**
  * Fires whenever the kiosk records a checkin. The admin panel's "Últimos
@@ -32,6 +37,7 @@ exports.onCheckinCreated = onDocumentCreated(`${COL.checkins}/{checkinId}`, asyn
   console.log(`[functions] novo checkin: ${checkin.nomeAluno} (${checkin.status})`);
 
   await db.collection(COL.logsAuditoria).add({
+    academiaId: checkin.academiaId ?? null, // isolamento por academia (ver firestore.rules)
     usuarioId: null, // evento do kiosk, não de um usuário logado no painel
     acao: "checkin_reconhecimento_facial",
     alvoId: checkin.alunoId,
@@ -64,6 +70,7 @@ exports.checkVencimentos = onSchedule("every day 08:00", async () => {
   snapshot.forEach((doc) => {
     const data = doc.data();
     batch.set(db.collection(COL.notificacoesPendentes).doc(), {
+      academiaId: data.academiaId ?? null,
       tipo: "aviso_vencimento",
       alunoId: doc.id,
       nomeAluno: data.nome,
@@ -85,9 +92,17 @@ exports.regenerateEmbedding = onCall(async (request) => {
   const alunoId = request.data?.alunoId;
   if (!alunoId) throw new HttpsError("invalid-argument", "alunoId é obrigatório");
 
+  // Só a equipe (admin/personal) da MESMA academia do aluno.
+  const uid = request.auth?.uid;
+  if (!uid) throw new HttpsError("unauthenticated", "Faça login.");
+  const usuario = (await db.collection(COL.usuarios).doc(uid).get()).data();
+  if (!usuario || !["administrador", "personal"].includes(usuario.perfil) || usuario.status === "inativo" || !usuario.academiaId) {
+    throw new HttpsError("permission-denied", "Sem permissão.");
+  }
+
   const alunoRef = db.collection(COL.alunos).doc(alunoId);
   const alunoSnap = await alunoRef.get();
-  if (!alunoSnap.exists) throw new HttpsError("not-found", "Aluno não encontrado");
+  if (!alunoSnap.exists || alunoSnap.data().academiaId !== usuario.academiaId) throw new HttpsError("not-found", "Aluno não encontrado");
 
   const { fotoUrl } = alunoSnap.data();
   if (!fotoUrl) throw new HttpsError("failed-precondition", "Aluno não tem foto cadastrada");

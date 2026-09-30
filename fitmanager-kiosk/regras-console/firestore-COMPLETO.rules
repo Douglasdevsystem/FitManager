@@ -1,30 +1,20 @@
-// ⚠️ NÃO faça `firebase deploy --only firestore:rules` com este arquivo sozinho.
-//
-// Este projeto Firebase (appfood-e25bb) já tem outro sistema publicado com
-// suas próprias regras. Firestore só aceita UM arquivo de regras por projeto
-// — publicar este arquivo como está SUBSTITUIRIA (apagaria) as regras do
-// outro sistema.
-//
-// Como usar: copie o conteúdo de dentro de `match /databases/{database}/documents { ... }`
-// abaixo e COLE dentro do `match /databases/{database}/documents { ... }` já
-// existente no firestore.rules do projeto appfood-e25bb, junto das regras
-// que já estão lá (SUBSTITUINDO o bloco antigo do FitManager, se já existir).
-// Todos os nomes (coleções e funções) têm o prefixo "fitmanager"/"fm" — não
-// deveria colidir com nada que já exista.
-//
-// ISOLAMENTO POR ACADEMIA: várias academias usam o mesmo banco. Todo
-// documento carrega academiaId, e cada usuário (fitmanager_usuarios) só
-// enxerga/grava documentos da academia dele. Documentos sem academiaId
-// (anteriores ao isolamento) ficam invisíveis até rodar
-// scripts/migrar-academias.js.
-//
-// rules_version = '2';
-// service cloud.firestore {
-//   match /databases/{database}/documents {
-//
-//     ...regras existentes do appfood aqui, sem mexer...
-//
-//     <<< COLE DAQUI PARA BAIXO >>>
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ─── Outros sistemas deste projeto (appfood) ────────────────────────────
+    // Mantém EXATAMENTE o comportamento anterior (modo de teste, aberto até
+    // 31/01/2028) para todas as coleções que NÃO são do FitManager.
+    // ⚠️ Isso deixa os dados do appfood abertos para qualquer pessoa — o
+    // appfood precisa de regras próprias antes dessa data.
+    // As coleções fitmanager_* ficam de fora e seguem as regras abaixo.
+    match /{caminho=**}/{colecao}/{docId} {
+      allow read, write: if !colecao.matches('fitmanager_.*')
+        && request.time < timestamp.date(2028, 1, 31);
+    }
+
+    // ─── FitManager (isolamento por academia) ───────────────────────────────
 
     function fmSignedIn() {
       return request.auth != null;
@@ -243,6 +233,5 @@
       allow write: if false; // só Cloud Functions (Admin SDK)
     }
 
-//     <<< COLE ATÉ AQUI >>>
-//   }
-// }
+  }
+}

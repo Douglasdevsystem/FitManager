@@ -13,6 +13,7 @@
     "format": "oxfmt"
   },
   "dependencies": {
+    "chess.js": "^1.4.0",
     "face-api.js": "^0.22.2",
     "firebase": "^12.19.0",
     "react": "^19.0.0",

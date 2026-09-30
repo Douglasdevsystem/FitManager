@@ -1,18 +1,16 @@
-// ⚠️ NÃO faça `firebase deploy --only storage` com este arquivo sozinho.
-//
-// Mesmo aviso do firestore.rules: este projeto Firebase já tem outro sistema
-// publicado com suas próprias Storage Rules. Copie o bloco abaixo para
-// dentro do storage.rules já existente do projeto appfood-e25bb — todo
-// caminho já está sob o prefixo "fitmanager/", então não deveria colidir
-// com nada que já exista.
-//
-// rules_version = '2';
-// service firebase.storage {
-//   match /b/{bucket}/o {
-//
-//     ...regras existentes do appfood aqui, sem mexer...
-//
-//     <<< COLE DAQUI PARA BAIXO >>>
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    // ─── Outros sistemas deste projeto (appfood) ────────────────────────────
+    // Mantém o comportamento anterior (aberto) para tudo que NÃO está na
+    // pasta fitmanager/. ⚠️ Isso deixa os arquivos do appfood abertos para
+    // qualquer pessoa — o appfood precisa de regras próprias.
+    match /{pasta}/{resto=**} {
+      allow read, write: if pasta != 'fitmanager';
+    }
+
+    // ─── FitManager ─────────────────────────────────────────────────────────
 
     // Equipe (admin/personal) ativa do FitManager — consulta o Firestore.
     function fmEquipeStorage() {
@@ -56,6 +54,5 @@
       allow write: if request.auth != null;
     }
 
-//     <<< COLE ATÉ AQUI >>>
-//   }
-// }
+  }
+}

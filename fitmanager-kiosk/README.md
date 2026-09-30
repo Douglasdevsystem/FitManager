@@ -53,10 +53,29 @@ cp .env.example .env        # preencha com os dados do seu projeto Firebase
    Gerar nova chave privada** → salve como `firebase-service-account.json` na
    raiz do projeto (já está no `.gitignore`, nunca commite esse arquivo).
 2. Preencha o `.env` com as chaves do seu app Firebase e o caminho do JSON
-   acima.
+   acima, e com **`ACADEMIA_ID`** — o id da academia onde este quiosque está
+   instalado (aparece ao rodar `node scripts/migrar-academias.js`). Várias
+   academias usam o mesmo banco: o quiosque só reconhece e libera alunos da
+   academia configurada, e sem `ACADEMIA_ID` não libera ninguém.
 3. `npm start` — baixa os modelos do `face-api.js` se ainda não existirem
    (idempotente, não falha se estiver offline — tenta de novo na próxima vez)
    e abre a janela do kiosk.
+
+## Isolamento por academia
+
+Cada academia cadastrada no FitManager tem um documento em
+`fitmanager_academias`, e **todo** documento (alunos, check-ins, treinos,
+usuários, exercícios, logs...) carrega `academiaId`. As regras do Firestore
+só deixam cada usuário ver/gravar dados da própria academia.
+
+Dados criados antes desse isolamento não têm `academiaId` e ficam
+invisíveis até serem migrados:
+
+```bash
+node scripts/migrar-academias.js                                   # simulação: mostra academias e dados sem academia
+node scripts/migrar-academias.js --academia <email-do-admin>            # confere para onde vão
+node scripts/migrar-academias.js --academia <email-do-admin> --aplicar  # grava
+```
 
 ## Coleções e caminhos (todos prefixados — projeto Firebase compartilhado)
 
