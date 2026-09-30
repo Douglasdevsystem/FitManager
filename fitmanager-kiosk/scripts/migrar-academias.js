@@ -35,8 +35,29 @@ const args = process.argv.slice(2);
 const APLICAR = args.includes("--aplicar");
 const alvoArg = args.includes("--academia") ? args[args.indexOf("--academia") + 1] : null;
 
-const serviceAccountPath = path.resolve(__dirname, "..", process.env.FIREBASE_SERVICE_ACCOUNT_PATH || "./firebase-service-account.json");
-admin.initializeApp({ credential: admin.credential.cert(require(serviceAccountPath)) });
+if (args.includes("--login-cli")) {
+  // Sem service account: usa a conta já logada no Firebase CLI (`firebase login`).
+  const os = require("os");
+  const fs = require("fs");
+  const cli = JSON.parse(fs.readFileSync(path.join(os.homedir(), ".config/configstore/firebase-tools.json"), "utf-8"));
+  const api = require(path.join(require("child_process").execSync("npm root -g").toString().trim(), "firebase-tools/lib/api.js"));
+  // O Firestore do Admin SDK só aceita service account ou "Application
+  // Default Credentials" — grava as credenciais do CLI num arquivo ADC
+  // temporário, que é apagado ao terminar.
+  const adcPath = path.join(os.tmpdir(), `fitmanager-adc-${process.pid}.json`);
+  fs.writeFileSync(adcPath, JSON.stringify({
+    type: "authorized_user",
+    client_id: api.clientId(),
+    client_secret: api.clientSecret(),
+    refresh_token: cli.tokens.refresh_token,
+  }), { mode: 0o600 });
+  process.on("exit", () => { try { fs.unlinkSync(adcPath); } catch { /* já removido */ } });
+  process.env.GOOGLE_APPLICATION_CREDENTIALS = adcPath;
+  admin.initializeApp({ projectId: process.env.FIREBASE_PROJECT_ID || "appfood-e25bb" });
+} else {
+  const serviceAccountPath = path.resolve(__dirname, "..", process.env.FIREBASE_SERVICE_ACCOUNT_PATH || "./firebase-service-account.json");
+  admin.initializeApp({ credential: admin.credential.cert(require(serviceAccountPath)) });
+}
 const db = admin.firestore();
 
 const P = process.env.FIRESTORE_PREFIX || "fitmanager_";
@@ -128,6 +149,15 @@ async function main() {
   };
   console.log("\nDocumentos SEM academia (invisíveis no painel até serem atribuídos):");
   for (const [nome, docs] of Object.entries(orfaos)) console.log(`  ${nome.padEnd(28)} ${docs.length}`);
+
+  // Datas ajudam a decidir de qual academia são os dados antigos.
+  const data = (v) => (v?.toDate ? v.toDate().toISOString().slice(0, 10) : typeof v === "string" ? v.slice(0, 10) : "?");
+  console.log("\nCriação dos administradores:");
+  for (const a of admins) console.log(`  ${a.data().email.padEnd(32)} ${data(a.data().criadoEm)}`);
+  console.log("Alunos sem academia (data de matrícula):");
+  for (const d of orfaos.alunos) console.log(`  ${d.id}  ${data(d.data().criadoEm ?? d.data().dataMatricula)}`);
+  const datasCheckins = orfaos.checkins.map((d) => d.data().timestamp).filter(Boolean).sort();
+  if (datasCheckins.length) console.log(`Check-ins sem academia: de ${datasCheckins[0].slice(0, 10)} a ${datasCheckins.at(-1).slice(0, 10)}`);
 
   if (!alvoArg) {
     console.log(`\nPara atribuir esses documentos a uma academia: --academia <id-ou-email-do-admin>${APLICAR ? "" : " (e --aplicar para gravar)"}`);
