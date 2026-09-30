@@ -14,6 +14,8 @@ const PENDING_PATH = path.join(__dirname, "../cache/pending-checkins.json");
 // system's data. Must match VITE_FIRESTORE_PREFIX in the admin panel's .env.
 const COLLECTION = `${process.env.FIRESTORE_PREFIX || "fitmanager_"}checkins`;
 const DEVICE_ID = process.env.KIOSK_DEVICE_ID || "kiosk-entrada-01";
+// Academia onde este quiosque está instalado (isolamento entre academias).
+const ACADEMIA_ID = process.env.ACADEMIA_ID || null;
 
 function loadPending() {
   try {
@@ -34,6 +36,7 @@ function savePending(list) {
 
 async function recordCheckin(payload) {
   const doc = {
+    academiaId: ACADEMIA_ID,
     alunoId: payload.alunoId ?? null,
     nomeAluno: payload.nome ?? "Desconhecido",
     timestamp: new Date().toISOString(),

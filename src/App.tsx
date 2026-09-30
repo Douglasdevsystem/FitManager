@@ -4,10 +4,17 @@ import { addDoc, collection, doc, getDoc, setDoc, updateDoc, deleteDoc, serverTi
 import { ref, uploadBytes, uploadBytesResumable, getDownloadURL, deleteObject } from "firebase/storage";
 import { httpsCallable } from "firebase/functions";
 import { auth, db, storage, functions, COLLECTIONS, STORAGE_PATHS, createAuthAccountWithoutSignIn } from "./lib/firebase";
-import { useAlunos, useCheckins, useTreinos, useUsuarios, useLogsAuditoria, useExecucoesTreino, useExerciciosBiblioteca, isToday } from "./lib/hooks";
+import { useAlunos, useCheckins, useTreinos, useTreinosDoAluno, useUsuarios, useLogsAuditoria, useExecucoesTreino, useExerciciosBiblioteca, isToday } from "./lib/hooks";
 import type { Aluno, AlunoStatus, Checkin, Treino, Exercicio, ExercicioBiblioteca, GrupoMuscular, Usuario, UsuarioPerfil } from "./lib/types";
 import { GRUPOS_MUSCULARES } from "./lib/types";
 import { CameraFeedPanel } from "./components/CameraFeedPanel";
+import Acompanhamento, { AvaliacoesFisicasPanel } from "./components/BodyTracking";
+import Quest, { type QuestAba } from "./components/Quest";
+import TelaPerfil from "./components/Perfil";
+import { JOGOS, statusEfetivo, useMeuQuestPerfil, useQuestPartidas, useQuestPresenca, type QuestPartida } from "./lib/quest";
+import { usePerfilAluno } from "./lib/perfil";
+import { SessaoContext, SemAcademiaError, carregarSessao, useSessao, type Sessao } from "./lib/sessao";
+import { abrirCamera, explicarErroCamera, type ErroCamera } from "./lib/camera";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -23,7 +30,7 @@ type Screen =
   | "register"
   | "camera";
 
-type StudentScreen = "meu-treino" | "execucao" | "historico" | "assinatura";
+type StudentScreen = "meu-treino" | "execucao" | "historico" | "acompanhamento" | "quest" | "perfil" | "assinatura";
 type AppMode = "login" | "signup" | "admin" | "student";
 
 type Plan = "Mensal" | "Trimestral" | "Anual";
@@ -294,7 +301,7 @@ function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean
 
 // ─── LOGIN ────────────────────────────────────────────────────────────────────
 
-function LoginScreen({ onLogin, onGoToSignup }: { onLogin: (mode: AppMode, aluno?: Aluno) => void; onGoToSignup: () => void }) {
+function LoginScreen({ onLogin, onGoToSignup }: { onLogin: (mode: AppMode, sessao: Sessao, aluno?: Aluno) => void; onGoToSignup: () => void }) {
   const [tab, setTab] = useState<"admin" | "student">("admin");
   const [adminEmail, setAdminEmail] = useState("");
   const [adminPass, setAdminPass] = useState("");
@@ -311,9 +318,21 @@ function LoginScreen({ onLogin, onGoToSignup }: { onLogin: (mode: AppMode, aluno
     setSubmitting(true);
     setError("");
     try {
-      await signInWithEmailAndPassword(auth, adminEmail, adminPass);
-      onLogin("admin");
+      const credential = await signInWithEmailAndPassword(auth, adminEmail, adminPass);
+      const sessao = await carregarSessao(credential.user.uid);
+      const { perfil, status } = sessao.usuario;
+      if ((perfil !== "administrador" && perfil !== "personal") || status === "inativo") {
+        await signOut(auth);
+        setError(perfil === "aluno" ? "Esta é uma conta de aluno — use a aba Portal do Aluno." : "Esta conta não tem acesso ao painel.");
+        return;
+      }
+      onLogin("admin", sessao);
     } catch (err) {
+      if (err instanceof SemAcademiaError) {
+        await signOut(auth);
+        setError(err.message);
+        return;
+      }
       const code = (err as { code?: string })?.code ?? "";
       setError(AUTH_ERROR_MESSAGES[code] ?? "E-mail ou senha incorretos.");
     } finally {
@@ -330,9 +349,9 @@ function LoginScreen({ onLogin, onGoToSignup }: { onLogin: (mode: AppMode, aluno
     setError("");
     try {
       const credential = await signInWithEmailAndPassword(auth, studentEmail, studentPass);
-      const usuarioSnap = await getDoc(doc(db, COLLECTIONS.usuarios, credential.user.uid));
-      const usuario = usuarioSnap.data() as Usuario | undefined;
-      if (!usuario || usuario.perfil !== "aluno" || !usuario.alunoId) {
+      const sessao = await carregarSessao(credential.user.uid).catch(() => null);
+      const usuario = sessao?.usuario;
+      if (!sessao || !usuario || usuario.perfil !== "aluno" || !usuario.alunoId || usuario.status === "inativo") {
         await signOut(auth);
         setError("Esta conta não tem um acesso de aluno vinculado. Fale com a recepção.");
         return;
@@ -343,7 +362,7 @@ function LoginScreen({ onLogin, onGoToSignup }: { onLogin: (mode: AppMode, aluno
         setError("Cadastro de aluno não encontrado. Fale com a recepção.");
         return;
       }
-      onLogin("student", { id: alunoSnap.id, ...alunoSnap.data() } as Aluno);
+      onLogin("student", sessao, { id: alunoSnap.id, ...alunoSnap.data() } as Aluno);
     } catch (err) {
       const code = (err as { code?: string })?.code ?? "";
       setError(AUTH_ERROR_MESSAGES[code] ?? "E-mail ou senha incorretos.");
@@ -433,9 +452,10 @@ const AUTH_ERROR_MESSAGES: Record<string, string> = {
   "auth/user-not-found": "Não existe conta com esse e-mail.",
   "auth/wrong-password": "Senha incorreta.",
   "auth/too-many-requests": "Muitas tentativas. Aguarde um pouco antes de tentar de novo.",
+  "permission-denied": "Acesso negado pelo banco de dados. Verifique se as regras do Firestore do FitManager estão publicadas.",
 };
 
-function CreateAccountScreen({ onCreated, onBack }: { onCreated: () => void; onBack: () => void }) {
+function CreateAccountScreen({ onCreated, onBack }: { onCreated: (sessao: Sessao) => void; onBack: () => void }) {
   const [form, setForm] = useState({
     nomeAcademia: "",
     nomeResponsavel: "",
@@ -483,22 +503,28 @@ function CreateAccountScreen({ onCreated, onBack }: { onCreated: () => void; onB
     setError("");
     try {
       const credential = await createUserWithEmailAndPassword(auth, form.email, form.senha);
+      const uid = credential.user.uid;
 
-      await setDoc(doc(db, COLLECTIONS.usuarios, credential.user.uid), {
+      // 1) a academia (cada conta nova é uma academia isolada das demais)...
+      const academiaRef = await addDoc(collection(db, COLLECTIONS.academias), {
+        nome: form.nomeAcademia,
+        whatsapp: form.whatsapp || null,
+        criadoPor: uid,
+        criadoEm: serverTimestamp(),
+      });
+      // 2) ...e o administrador vinculado a ela.
+      await setDoc(doc(db, COLLECTIONS.usuarios, uid), {
         nome: form.nomeResponsavel,
         email: form.email,
         perfil: "administrador",
         status: "ativo",
-        academia: {
-          nome: form.nomeAcademia,
-          whatsapp: form.whatsapp || null,
-        },
+        academiaId: academiaRef.id,
         consentimentoTermos: true,
         consentimentoDataHora: new Date().toISOString(),
         criadoEm: serverTimestamp(),
       });
 
-      onCreated();
+      onCreated(await carregarSessao(uid));
     } catch (err) {
       const code = (err as { code?: string })?.code ?? "";
       setError(AUTH_ERROR_MESSAGES[code] ?? "Não foi possível criar a conta. Tente novamente.");
@@ -561,9 +587,50 @@ function StudentPortal({ student, onLogout }: { student: Aluno; onLogout: () => 
   const [screen, setScreen] = useState<StudentScreen>("meu-treino");
   const [mobileMenu, setMobileMenu] = useState(false);
   const [activeWorkoutId, setActiveWorkoutId] = useState<string | null>(null);
+  const [questAba, setQuestAba] = useState<QuestAba>("alunos");
+  const [questKey, setQuestKey] = useState(0);
+  const [convite, setConvite] = useState<QuestPartida | null>(null);
 
-  const { data: treinos } = useTreinos();
-  const studentWorkouts = treinos.filter((t) => t.alunoId === student.id && t.ativo);
+  // Perfil + Quest: presença online, perfil público e partidas em tempo real
+  // (no nível do portal para a notificação de convite funcionar em qualquer aba).
+  const uid = auth.currentUser?.uid ?? null;
+  const { perfil } = usePerfilAluno(student.id);
+  const presenca = useQuestPresenca(student.id);
+  const meuQuestPerfil = useMeuQuestPerfil(student.id, presenca.pronto);
+  const { data: partidasQuest } = useQuestPartidas(uid);
+  const convitesRecebidos = partidasQuest.filter((p) => statusEfetivo(p) === "pendente" && p.desafiadoId === student.id);
+  const questPendencias = convitesRecebidos.length + partidasQuest.filter((p) => p.status === "andamento" && p.vez === student.id).length;
+  const convitesVistos = useRef<Set<string> | null>(null);
+
+  useEffect(() => {
+    const ids = new Set(convitesRecebidos.map((p) => p.id));
+    const primeiraCarga = convitesVistos.current === null;
+    const novos = convitesRecebidos.filter((p) => !convitesVistos.current?.has(p.id));
+    convitesVistos.current = new Set([...(convitesVistos.current ?? []), ...ids]);
+    if (novos.length === 0) return;
+    setConvite(novos[0]);
+    // Notificação do sistema só para convites que chegam com o portal aberto.
+    if (!primeiraCarga && typeof Notification !== "undefined" && Notification.permission === "granted") {
+      for (const p of novos) {
+        try {
+          new Notification("Novo desafio no Quest 🎮", { body: `${p.nomes[p.desafianteId]} te desafiou para ${JOGOS[p.jogo].nome}` });
+        } catch {
+          // Chrome no Android só permite notificação via service worker — fica só o aviso dentro do app.
+        }
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [convitesRecebidos.map((p) => p.id).join(",")]);
+
+  const abrirQuest = (aba: QuestAba) => {
+    setQuestAba(aba);
+    setQuestKey((k) => k + 1);
+    setScreen("quest");
+    setConvite(null);
+  };
+
+  const { data: treinos } = useTreinosDoAluno(student.id);
+  const studentWorkouts = treinos.filter((t) => t.ativo);
   const activeWorkout = studentWorkouts.find((t) => t.id === activeWorkoutId) ?? null;
 
   const handleFinishWorkout = async (summary: { treino: Treino; completedCount: number; totalCount: number; startedAt: Date; finishedAt: Date }) => {
@@ -585,9 +652,10 @@ function StudentPortal({ student, onLogout }: { student: Aluno; onLogout: () => 
     setScreen("historico");
   };
 
+  const avatarUrl = perfil?.fotos?.[0]?.url ?? student.fotoUrl;
   const AlunoAvatar = ({ size }: { size: number }) => (
-    student.fotoUrl ? (
-      <img src={student.fotoUrl} alt={student.nome} className="rounded-full object-cover border-2 border-green-400/40" style={{ width: size, height: size }} />
+    avatarUrl ? (
+      <img src={avatarUrl} alt={student.nome} className="rounded-full object-cover border-2 border-green-400/40" style={{ width: size, height: size }} />
     ) : (
       <span className="rounded-full bg-[#163059]/60 border-2 border-green-400/40 flex items-center justify-center text-slate-400" style={{ width: size, height: size }}>
         <Icon name="user" className="w-1/2 h-1/2" />
@@ -598,8 +666,13 @@ function StudentPortal({ student, onLogout }: { student: Aluno; onLogout: () => 
   const NAV = [
     { id: "meu-treino" as StudentScreen, label: "Meu Treino", icon: "🏋️" },
     { id: "historico" as StudentScreen, label: "Histórico", icon: "📅" },
+    { id: "acompanhamento" as StudentScreen, label: "Acompanhamento", icon: "📏" },
+    { id: "quest" as StudentScreen, label: "Quest", icon: "🎮", badge: questPendencias },
     { id: "assinatura" as StudentScreen, label: "Assinatura", icon: "💳" },
   ];
+  const NavBadge = ({ n }: { n?: number }) => (n ? (
+    <span className="absolute -top-1 -right-2 min-w-4 h-4 px-1 rounded-full bg-green-500 text-black text-[10px] font-bold leading-4 text-center">{n}</span>
+  ) : null);
 
   return (
     <div className="min-h-screen bg-[#050d1a] flex flex-col">
@@ -620,12 +693,14 @@ function StudentPortal({ student, onLogout }: { student: Aluno; onLogout: () => 
           {NAV.map((item) => (
             <button key={item.id} onClick={() => setScreen(item.id)}
               className={`px-3 py-1.5 rounded-lg text-xs font-display font-semibold transition-colors flex items-center gap-1.5 ${screen === item.id || screen === "execucao" && item.id === "meu-treino" ? "bg-green-400/15 text-green-400" : "text-slate-400 hover:text-white hover:bg-white/5"}`}>
-              <span>{item.icon}</span>{item.label}
+              <span className="relative">{item.icon}<NavBadge n={item.badge} /></span>{item.label}
             </button>
           ))}
         </nav>
         <div className="flex items-center gap-2">
-          <AlunoAvatar size={32} />
+          <button onClick={() => setScreen("perfil")} className={`rounded-full transition-shadow ${screen === "perfil" ? "ring-2 ring-green-400 ring-offset-2 ring-offset-[#050d1a]" : ""}`} aria-label="Abrir meu perfil" title="Meu perfil">
+            <AlunoAvatar size={32} />
+          </button>
           <button onClick={onLogout} className="text-xs text-slate-500 hover:text-white transition-colors hidden sm:block">Sair</button>
           <button onClick={() => setMobileMenu(!mobileMenu)} className="md:hidden text-slate-400 hover:text-white ml-1">☰</button>
         </div>
@@ -635,22 +710,36 @@ function StudentPortal({ student, onLogout }: { student: Aluno; onLogout: () => 
       {mobileMenu && (
         <div className="md:hidden fixed inset-0 z-50 bg-black/60" onClick={() => setMobileMenu(false)}>
           <div className="absolute right-0 top-0 bottom-0 w-56 bg-[#091426] border-l border-[#163059] p-4" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center gap-3 mb-6 px-2">
+            <button onClick={() => { setScreen("perfil"); setMobileMenu(false); }} className="flex items-center gap-3 mb-6 px-2 text-left">
               <AlunoAvatar size={40} />
               <div>
                 <p className="font-display font-bold text-white text-sm">{student.nome}</p>
-                <p className="text-xs text-slate-400">Portal do Aluno</p>
+                <p className="text-xs text-green-400">Ver meu perfil ›</p>
               </div>
-            </div>
+            </button>
             {NAV.map((item) => (
               <button key={item.id} onClick={() => { setScreen(item.id); setMobileMenu(false); }}
                 className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl mb-1 text-sm font-display font-semibold transition-colors text-left ${screen === item.id ? "bg-green-400/15 text-green-400" : "text-slate-400 hover:text-white hover:bg-white/5"}`}>
-                <span className="text-xl">{item.icon}</span>{item.label}
+                <span className="text-xl relative">{item.icon}<NavBadge n={item.badge} /></span>{item.label}
               </button>
             ))}
             <button onClick={onLogout} className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl mt-4 text-sm font-display text-slate-400 hover:text-white">
               <span>🚪</span> Sair
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* Notificação de convite do Quest */}
+      {convite && screen !== "quest" && (
+        <div className="sticky top-14 z-30 px-4 pt-3 max-w-lg w-full mx-auto md:max-w-2xl">
+          <div className="flex items-center gap-3 rounded-xl border border-green-400/40 bg-[#0f2040]/95 backdrop-blur-sm p-3 shadow-lg shadow-black/40">
+            <span className="text-2xl">🎮</span>
+            <p className="flex-1 text-xs text-slate-200">
+              <strong className="font-display text-white">{convite.nomes[convite.desafianteId]}</strong> te desafiou para <strong className="font-display text-white">{JOGOS[convite.jogo].nome}</strong>!
+            </p>
+            <button onClick={() => abrirQuest("desafios")} className="px-3 py-1.5 rounded-lg bg-green-500 hover:bg-green-400 text-black text-xs font-display font-bold">Ver</button>
+            <button onClick={() => setConvite(null)} className="text-slate-500 hover:text-white text-xs" aria-label="Dispensar">✕</button>
           </div>
         </div>
       )}
@@ -666,16 +755,25 @@ function StudentPortal({ student, onLogout }: { student: Aluno; onLogout: () => 
           <WorkoutExecution workout={activeWorkout} onFinish={handleFinishWorkout} onCancel={() => setScreen("meu-treino")} />
         )}
         {screen === "historico" && <WorkoutHistory alunoId={student.id} />}
+        {screen === "acompanhamento" && <Acompanhamento alunoId={student.id} />}
+        {screen === "quest" && (
+          <Quest key={questKey} meuId={student.id} meuPerfil={meuQuestPerfil} partidas={partidasQuest}
+            pronto={presenca.pronto} erroPresenca={presenca.erro} abaInicial={questAba} onAbrirPerfil={() => setScreen("perfil")} />
+        )}
+        {screen === "perfil" && uid && (
+          <TelaPerfil alunoId={student.id} uid={uid} nomeCadastro={student.nome} perfil={perfil}
+            academiaNome={meuQuestPerfil?.academiaNome} onVoltar={() => setScreen("meu-treino")} />
+        )}
         {screen === "assinatura" && <MySubscription student={student} />}
       </main>
 
-      {/* Bottom nav (mobile) */}
-      <nav className="md:hidden sticky bottom-0 z-30 flex border-t border-[#163059] bg-[#050d1a]/95 backdrop-blur-sm">
+      {/* Bottom nav (mobile) — escondida no Perfil, que tem o botão Salvar fixo no rodapé */}
+      <nav className={`md:hidden sticky bottom-0 z-30 flex border-t border-[#163059] bg-[#050d1a]/95 backdrop-blur-sm ${screen === "perfil" ? "hidden" : ""}`}>
         {NAV.map((item) => (
-          <button key={item.id} onClick={() => setScreen(item.id)}
-            className={`flex-1 flex flex-col items-center gap-1 py-3 text-xs font-display font-medium transition-colors ${screen === item.id || (screen === "execucao" && item.id === "meu-treino") ? "text-green-400" : "text-slate-500 hover:text-white"}`}>
-            <span className="text-xl leading-none">{item.icon}</span>
-            <span>{item.label}</span>
+          <button key={item.id} onClick={() => (item.id === "quest" ? abrirQuest(questPendencias ? "desafios" : "alunos") : setScreen(item.id))}
+            className={`flex-1 min-w-0 flex flex-col items-center gap-1 py-3 text-[11px] font-display font-medium transition-colors ${screen === item.id || (screen === "execucao" && item.id === "meu-treino") ? "text-green-400" : "text-slate-500 hover:text-white"}`}>
+            <span className="text-xl leading-none relative">{item.icon}<NavBadge n={item.badge} /></span>
+            <span className="max-w-full truncate px-0.5">{item.label}</span>
           </button>
         ))}
       </nav>
@@ -1322,9 +1420,11 @@ const PHOTO_CACHE_KEY = "fitmanager_captured_photo";
 const PLAN_MONTHS: Record<string, number> = { mensal: 1, trimestral: 3, anual: 12 };
 
 function RegisterStudent({ onBack }: { onBack: () => void }) {
+  const academiaId = useSessao().academiaId;
   const [photo, setPhoto] = useState<string | null>(null);
   const [webcam, setWebcam] = useState(false);
-  const [cameraError, setCameraError] = useState<string | null>(null);
+  const [cameraError, setCameraError] = useState<ErroCamera | null>(null);
+  const [tentativaCamera, setTentativaCamera] = useState(0);
   const [savedNotice, setSavedNotice] = useState(false);
   const [form, setForm] = useState({ nome: "", endereco: "", whatsapp: "", cpf: "", rg: "", email: "", tipoPlano: "mensal", valorPlano: "120" });
   const [consentimentoLGPD, setConsentimentoLGPD] = useState(false);
@@ -1352,19 +1452,8 @@ function RegisterStudent({ onBack }: { onBack: () => void }) {
     setCameraError(null);
     let cancelled = false;
 
-    if (!navigator.mediaDevices?.getUserMedia) {
-      console.error("[webcam] navigator.mediaDevices.getUserMedia is unavailable. isSecureContext:", window.isSecureContext);
-      setCameraError(
-        window.isSecureContext
-          ? "Este navegador não suporta acesso à câmera."
-          : "A câmera só funciona em conexão segura (HTTPS) ou em localhost. Acesse via https:// ou http://localhost para testar a webcam."
-      );
-      return;
-    }
-
     console.log("[webcam] requesting getUserMedia...");
-    navigator.mediaDevices
-      .getUserMedia({ video: { facingMode: "user" } })
+    abrirCamera()
       .then((stream) => {
         console.log("[webcam] stream acquired:", stream.id, "tracks:", stream.getVideoTracks().map((t) => t.label));
         // React 18 StrictMode double-invokes effects in dev, which can run this
@@ -1388,7 +1477,7 @@ function RegisterStudent({ onBack }: { onBack: () => void }) {
       })
       .catch((err) => {
         console.error("[webcam] getUserMedia rejected:", err.name, err.message);
-        if (!cancelled) setCameraError(`Não foi possível acessar a câmera (${err.name}). Verifique as permissões do navegador.`);
+        if (!cancelled) setCameraError(explicarErroCamera(err));
       });
 
     return () => {
@@ -1396,7 +1485,7 @@ function RegisterStudent({ onBack }: { onBack: () => void }) {
       streamRef.current?.getTracks().forEach((t) => t.stop());
       streamRef.current = null;
     };
-  }, [webcam]);
+  }, [webcam, tentativaCamera]);
 
   const handleFile = (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
@@ -1412,7 +1501,7 @@ function RegisterStudent({ onBack }: { onBack: () => void }) {
     console.log("[webcam] capture requested. videoWidth:", video?.videoWidth, "videoHeight:", video?.videoHeight, "readyState:", video?.readyState);
     if (!video || !canvas || !video.videoWidth) {
       console.warn("[webcam] capture aborted — video not ready yet");
-      setCameraError("A câmera ainda não carregou a imagem. Aguarde um instante e tente novamente.");
+      setCameraError({ codigo: "VideoNaoPronto", titulo: "A câmera ainda não carregou a imagem", instrucao: "Aguarde um instante e toque em \"Tentar novamente\"." });
       return;
     }
     canvas.width = video.videoWidth;
@@ -1467,6 +1556,7 @@ function RegisterStudent({ onBack }: { onBack: () => void }) {
       dataVencimento.setMonth(dataVencimento.getMonth() + months);
 
       await setDoc(alunoRef, {
+        academiaId,
         nome: form.nome,
         endereco: form.endereco,
         whatsapp: form.whatsapp,
@@ -1530,9 +1620,12 @@ function RegisterStudent({ onBack }: { onBack: () => void }) {
           {webcam && (
             <div className="mt-3 p-4 rounded-lg border border-gray-200 bg-gray-50 text-center text-sm text-gray-500">
               {cameraError ? (
-                <div className="w-full py-8 flex flex-col items-center gap-2 text-red-500 text-xs">
-                  <Icon name="alert-triangle" className="w-5 h-5" />
-                  {cameraError}
+                <div className="w-full py-6 flex flex-col items-center gap-2 text-xs">
+                  <Icon name="alert-triangle" className="w-5 h-5 text-red-500" />
+                  <p className="text-red-600 font-display font-semibold">{cameraError.titulo}</p>
+                  <p className="text-gray-600 max-w-sm leading-relaxed">{cameraError.instrucao}</p>
+                  <button onClick={() => setTentativaCamera((t) => t + 1)} className="mt-1 px-3 py-1.5 rounded-lg border border-gray-300 text-gray-700 hover:border-green-400 font-display font-medium">Tentar novamente</button>
+                  <p className="text-[10px] text-gray-400 font-mono-data">código: {cameraError.codigo}</p>
                 </div>
               ) : (
                 <video
@@ -1592,6 +1685,7 @@ function RegisterStudent({ onBack }: { onBack: () => void }) {
 }
 
 function StudentsCheckin({ onNavigate }: { onNavigate: (s: Screen) => void }) {
+  const academiaId = useSessao().academiaId;
   const { data: alunos, loading: loadingAlunos, error: alunosError } = useAlunos();
   const { data: checkins } = useCheckins();
   const { data: usuarios } = useUsuarios();
@@ -1599,6 +1693,7 @@ function StudentsCheckin({ onNavigate }: { onNavigate: (s: Screen) => void }) {
   const [search, setSearch] = useState("");
   const [activeTab, setActiveTab] = useState<"alunos" | "checkin">("alunos");
   const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [showAvaliacoes, setShowAvaliacoes] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState("");
   const [editingAluno, setEditingAluno] = useState<Aluno | null>(null);
@@ -1702,6 +1797,7 @@ function StudentsCheckin({ onNavigate }: { onNavigate: (s: Screen) => void }) {
     try {
       const uid = await createAuthAccountWithoutSignIn(accessForm.email, accessForm.senha);
       await setDoc(doc(db, COLLECTIONS.usuarios, uid), {
+        academiaId,
         nome: selected.nome,
         email: accessForm.email,
         perfil: "aluno",
@@ -1848,6 +1944,13 @@ function StudentsCheckin({ onNavigate }: { onNavigate: (s: Screen) => void }) {
                 </div>
 
                 <div className="border-t border-gray-100 pt-3 space-y-2">
+                  <span className="text-xs font-display text-gray-500 uppercase tracking-wider">Acompanhamento físico</span>
+                  <button onClick={() => setShowAvaliacoes(true)} className="w-full flex items-center justify-center gap-1.5 text-xs px-3 py-2 rounded-lg border border-gray-300 hover:border-green-400 text-gray-600 hover:text-gray-900 transition-colors font-display font-medium">
+                    📏 Ver avaliações físicas
+                  </button>
+                </div>
+
+                <div className="border-t border-gray-100 pt-3 space-y-2">
                   <span className="text-xs font-display text-gray-500 uppercase tracking-wider">Acesso do aluno (portal)</span>
                   {(() => {
                     const usuario = alunoUsuario(selected.id);
@@ -1939,6 +2042,12 @@ function StudentsCheckin({ onNavigate }: { onNavigate: (s: Screen) => void }) {
         </div>
       )}
 
+      {showAvaliacoes && selected && (
+        <Modal title={`Avaliações físicas · ${selected.nome}`} onClose={() => setShowAvaliacoes(false)} wide>
+          <AvaliacoesFisicasPanel alunoId={selected.id} />
+        </Modal>
+      )}
+
       {editingAluno && (
         <Modal title="Editar Aluno" onClose={() => setEditingAluno(null)} wide>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -1994,6 +2103,7 @@ const EMPTY_EXERCICIO_FORM = { nome: "", grupoMuscular: "peito" as GrupoMuscular
 
 /** Biblioteca compartilhada de exercícios (CRUD + upload de vídeo/foto demonstrativa) — usada pelo "Montar Treino" para não recadastrar o mesmo exercício em todo treino. */
 function ExerciseLibrary() {
+  const academiaId = useSessao().academiaId;
   const mediaFileRef = useRef<HTMLInputElement>(null);
   const { data: exercicios, loading, error } = useExerciciosBiblioteca();
   const [showForm, setShowForm] = useState(false);
@@ -2085,7 +2195,7 @@ function ExerciseLibrary() {
       if (editingId) {
         await updateDoc(doc(db, COLLECTIONS.exerciciosBiblioteca, editingId), payload);
       } else {
-        await addDoc(collection(db, COLLECTIONS.exerciciosBiblioteca), { ...payload, criadoEm: serverTimestamp() });
+        await addDoc(collection(db, COLLECTIONS.exerciciosBiblioteca), { ...payload, academiaId, criadoEm: serverTimestamp() });
       }
       resetForm();
     } catch (err) {
@@ -2221,6 +2331,7 @@ interface BuilderExercicio extends Exercicio {
 
 /** "Montar Treino" — combina exercícios da biblioteca com séries/reps/carga/descanso por treino, reordena e salva para um ou mais alunos. */
 function Workouts() {
+  const academiaId = useSessao().academiaId;
   const { data: alunos } = useAlunos();
   const { data: treinos, loading: loadingTreinos, error: treinosError } = useTreinos();
   const { data: biblioteca } = useExerciciosBiblioteca();
@@ -2302,6 +2413,7 @@ function Workouts() {
           const aluno = alunos.find((a) => a.id === alunoId);
           if (!aluno) return null;
           return addDoc(collection(db, COLLECTIONS.alunos, aluno.id, COLLECTIONS.treinos), {
+            academiaId,
             alunoId: aluno.id,
             alunoNome: aluno.nome,
             titulo: titulo.trim(),
@@ -2656,6 +2768,7 @@ const SETTINGS_TABS: { id: SettingsTab; label: string }[] = [
 ];
 
 function Settings() {
+  const academiaId = useSessao().academiaId;
   const [activeTab, setActiveTab] = useState<SettingsTab>("usuarios");
 
   // ── Usuários do Sistema ──
@@ -2688,7 +2801,7 @@ function Settings() {
       // que uma função (a implementar) criar a conta dela no Firebase Auth
       // e este documento for migrado para o uid correspondente.
       const ref = doc(collection(db, COLLECTIONS.usuarios));
-      await setDoc(ref, { nome: newUserForm.nome, email: newUserForm.email, perfil: newUserForm.perfil, status: "ativo", criadoEm: serverTimestamp() });
+      await setDoc(ref, { academiaId, nome: newUserForm.nome, email: newUserForm.email, perfil: newUserForm.perfil, status: "ativo", criadoEm: serverTimestamp() });
       setAddingUser(false);
     } catch (err) {
       console.error("[usuarios] falha ao salvar usuário:", err);
@@ -3364,24 +3477,41 @@ function CameraScreen() {
  * essa janela nova já nasce autenticada automaticamente.
  */
 function CameraKioskWindow() {
-  const [authState, setAuthState] = useState<"loading" | "signed-in" | "signed-out">("loading");
+  const [authState, setAuthState] = useState<"loading" | "signed-in" | "signed-out" | "sem-acesso">("loading");
+  const [sessao, setSessao] = useState<Sessao | null>(null);
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (user) => setAuthState(user ? "signed-in" : "signed-out"));
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      if (!user) {
+        setAuthState("signed-out");
+        return;
+      }
+      // Só a equipe da academia usa a câmera — e só com os alunos dela.
+      try {
+        const s = await carregarSessao(user.uid);
+        if (s.usuario.perfil !== "administrador" && s.usuario.perfil !== "personal") throw new Error("sem acesso");
+        setSessao(s);
+        setAuthState("signed-in");
+      } catch {
+        setAuthState("sem-acesso");
+      }
+    });
     return unsubscribe;
   }, []);
 
   if (authState === "loading") {
     return <div className="min-h-screen bg-black flex items-center justify-center text-white text-sm">Conectando...</div>;
   }
-  if (authState === "signed-out") {
+  if (authState !== "signed-in" || !sessao) {
     return (
       <div className="min-h-screen bg-black flex items-center justify-center text-white text-sm text-center p-6">
-        Faça login na janela principal do FitManager primeiro, depois reabra esta tela.
+        {authState === "sem-acesso"
+          ? "Esta conta não tem acesso à câmera da academia."
+          : "Faça login na janela principal do FitManager primeiro, depois reabra esta tela."}
       </div>
     );
   }
-  return <CameraFeedPanel fullscreen />;
+  return <SessaoContext.Provider value={sessao}><CameraFeedPanel fullscreen /></SessaoContext.Provider>;
 }
 
 // ─── Admin Shell ──────────────────────────────────────────────────────────────
@@ -3445,6 +3575,8 @@ function SidebarNav({ screen, navigate, collapsed }: { screen: Screen; navigate:
 }
 
 function AdminPanel({ onLogout }: { onLogout: () => void }) {
+  const sessao = useSessao();
+  const inicial = sessao.usuario.nome?.trim().charAt(0).toUpperCase() || "A";
   const [screen, setScreen] = useState<Screen>("dashboard");
   const [mobileOpen, setMobileOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
@@ -3485,11 +3617,11 @@ function AdminPanel({ onLogout }: { onLogout: () => void }) {
 
         <div className={`border-t border-gray-200 p-3 shrink-0 ${collapsed ? "flex flex-col items-center gap-2" : ""}`}>
           <div className={`flex items-center gap-2.5 ${collapsed ? "" : "mb-2"}`}>
-            <div className="w-8 h-8 rounded-full bg-gray-200 border border-gray-300 flex items-center justify-center text-xs text-gray-600 font-display font-bold shrink-0">A</div>
+            <div className="w-8 h-8 rounded-full bg-gray-200 border border-gray-300 flex items-center justify-center text-xs text-gray-600 font-display font-bold shrink-0">{inicial}</div>
             {!collapsed && (
               <div className="min-w-0">
-                <p className="text-xs font-display font-semibold text-gray-900 truncate">Admin Geral</p>
-                <p className="text-[11px] text-gray-400 truncate">Administrador</p>
+                <p className="text-xs font-display font-semibold text-gray-900 truncate">{sessao.usuario.nome}</p>
+                <p className="text-[11px] text-gray-400 truncate">{sessao.academia?.nome ?? "Academia"} · {sessao.usuario.perfil === "personal" ? "Personal" : "Administrador"}</p>
               </div>
             )}
           </div>
@@ -3512,10 +3644,10 @@ function AdminPanel({ onLogout }: { onLogout: () => void }) {
             <SidebarNav screen={screen} navigate={navigate} collapsed={false} />
             <div className="border-t border-gray-200 p-3 shrink-0">
               <div className="flex items-center gap-2.5 mb-2">
-                <div className="w-8 h-8 rounded-full bg-gray-200 border border-gray-300 flex items-center justify-center text-xs text-gray-600 font-display font-bold">A</div>
+                <div className="w-8 h-8 rounded-full bg-gray-200 border border-gray-300 flex items-center justify-center text-xs text-gray-600 font-display font-bold">{inicial}</div>
                 <div className="min-w-0">
-                  <p className="text-xs font-display font-semibold text-gray-900 truncate">Admin Geral</p>
-                  <p className="text-[11px] text-gray-400 truncate">Administrador</p>
+                  <p className="text-xs font-display font-semibold text-gray-900 truncate">{sessao.usuario.nome}</p>
+                  <p className="text-[11px] text-gray-400 truncate">{sessao.academia?.nome ?? "Academia"} · {sessao.usuario.perfil === "personal" ? "Personal" : "Administrador"}</p>
                 </div>
               </div>
               <button onClick={onLogout} className="text-xs text-gray-400 hover:text-gray-700 transition-colors">Sair</button>
@@ -3558,6 +3690,7 @@ function AdminPanel({ onLogout }: { onLogout: () => void }) {
 export default function App() {
   const [mode, setMode] = useState<AppMode>("login");
   const [activeStudent, setActiveStudent] = useState<Aluno | null>(null);
+  const [sessao, setSessao] = useState<Sessao | null>(null);
 
   // Janela aberta no segundo monitor pelo botão "Abrir em outra tela" da tela
   // de Câmera — sem sidebar/login, só o feed + reconhecimento em tela cheia.
@@ -3565,18 +3698,22 @@ export default function App() {
     return <CameraKioskWindow />;
   }
 
-  const handleLogin = (m: AppMode, aluno?: Aluno) => {
+  const handleLogin = (m: AppMode, novaSessao: Sessao, aluno?: Aluno) => {
     if (m === "student" && aluno) {
       setActiveStudent(aluno);
     }
+    setSessao(novaSessao);
     setMode(m);
   };
 
-  const handleLogout = () => { signOut(auth).catch(() => {}); setMode("login"); setActiveStudent(null); };
+  const handleLogout = () => { signOut(auth).catch(() => {}); setMode("login"); setActiveStudent(null); setSessao(null); };
 
-  if (mode === "login") return <LoginScreen onLogin={handleLogin} onGoToSignup={() => setMode("signup")} />;
-  if (mode === "signup") return <CreateAccountScreen onCreated={() => setMode("admin")} onBack={() => setMode("login")} />;
-  if (mode === "admin") return <AdminPanel onLogout={handleLogout} />;
-  if (mode === "student" && activeStudent) return <StudentPortal student={activeStudent} onLogout={handleLogout} />;
+  if (mode === "signup") return <CreateAccountScreen onCreated={(s) => handleLogin("admin", s)} onBack={() => setMode("login")} />;
+  if (mode === "admin" && sessao) {
+    return <SessaoContext.Provider value={sessao}><AdminPanel onLogout={handleLogout} /></SessaoContext.Provider>;
+  }
+  if (mode === "student" && activeStudent && sessao) {
+    return <SessaoContext.Provider value={sessao}><StudentPortal student={activeStudent} onLogout={handleLogout} /></SessaoContext.Provider>;
+  }
   return <LoginScreen onLogin={handleLogin} onGoToSignup={() => setMode("signup")} />;
 }

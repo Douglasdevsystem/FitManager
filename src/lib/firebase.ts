@@ -47,6 +47,10 @@ const FS_PREFIX = import.meta.env.VITE_FIRESTORE_PREFIX || "fitmanager_";
 const STORAGE_PREFIX = import.meta.env.VITE_STORAGE_PREFIX || "fitmanager";
 
 export const COLLECTIONS = {
+  // Cada academia cliente do FitManager. TODO documento abaixo carrega um
+  // academiaId, e as regras do Firestore só deixam cada usuário ver os da
+  // própria academia (ver lib/sessao.ts).
+  academias: `${FS_PREFIX}academias`,
   alunos: `${FS_PREFIX}alunos`,
   checkins: `${FS_PREFIX}checkins`,
   usuarios: `${FS_PREFIX}usuarios`,
@@ -63,6 +67,13 @@ export const COLLECTIONS = {
   // subcoleção de mesmo nome do outro sistema.
   treinos: `${FS_PREFIX}Treinos`,
   execucoesTreino: `${FS_PREFIX}ExecucoesTreino`,
+  avaliacoesFisicas: `${FS_PREFIX}AvaliacoesFisicas`,
+  // Perfil do aluno (tela "Perfil") — privado; a versão pública fica em
+  // questPerfis, gerada por Cloud Function.
+  perfisAlunos: `${FS_PREFIX}perfisAlunos`,
+  // Quest (desafios entre alunos) — escritas só pelas Cloud Functions.
+  questPerfis: `${FS_PREFIX}questPerfis`,
+  questPartidas: `${FS_PREFIX}questPartidas`,
 } as const;
 
 export const STORAGE_PATHS = {
@@ -70,6 +81,7 @@ export const STORAGE_PATHS = {
   checkinsFotos: `${STORAGE_PREFIX}/checkins-fotos`,
   documentosAcademia: `${STORAGE_PREFIX}/documentos-academia`,
   exerciciosMidia: `${STORAGE_PREFIX}/exercicios-midia`,
+  perfisAlunos: `${STORAGE_PREFIX}/perfis-alunos`,
 } as const;
 
 /**

@@ -8,8 +8,15 @@
 // Como usar: copie o conteúdo de dentro de `match /databases/{database}/documents { ... }`
 // abaixo e COLE dentro do `match /databases/{database}/documents { ... }` já
 // existente no firestore.rules do projeto appfood-e25bb, junto das regras
-// que já estão lá. Todos os nomes (coleções e funções) já têm o prefixo
-// "fitmanager" — não deveria colidir com nada que já exista.
+// que já estão lá (SUBSTITUINDO o bloco antigo do FitManager, se já existir).
+// Todos os nomes (coleções e funções) têm o prefixo "fitmanager"/"fm" — não
+// deveria colidir com nada que já exista.
+//
+// ISOLAMENTO POR ACADEMIA: várias academias usam o mesmo banco. Todo
+// documento carrega academiaId, e cada usuário (fitmanager_usuarios) só
+// enxerga/grava documentos da academia dele. Documentos sem academiaId
+// (anteriores ao isolamento) ficam invisíveis até rodar
+// scripts/migrar-academias.js.
 //
 // rules_version = '2';
 // service cloud.firestore {
@@ -19,69 +26,211 @@
 //
 //     <<< COLE DAQUI PARA BAIXO >>>
 
-    function fitmanagerIsSignedIn() {
+    function fmSignedIn() {
       return request.auth != null;
     }
 
-    function fitmanagerIsAdmin() {
-      return fitmanagerIsSignedIn() &&
-        get(/databases/$(database)/documents/fitmanager_usuarios/$(request.auth.uid)).data.perfil == "administrador";
+    function fmUsuarioPath() {
+      return /databases/$(database)/documents/fitmanager_usuarios/$(request.auth.uid);
     }
 
-    function fitmanagerIsPersonal() {
-      return fitmanagerIsSignedIn() &&
-        get(/databases/$(database)/documents/fitmanager_usuarios/$(request.auth.uid)).data.perfil == "personal";
+    function fmTemUsuario() {
+      return fmSignedIn() && exists(fmUsuarioPath());
     }
 
-    function fitmanagerIsOwnerAluno(alunoId) {
-      return fitmanagerIsSignedIn() &&
-        get(/databases/$(database)/documents/fitmanager_usuarios/$(request.auth.uid)).data.alunoId == alunoId;
+    function fmUsuario() {
+      return get(fmUsuarioPath()).data;
+    }
+
+    function fmAcademia() {
+      return fmUsuario().get("academiaId", null);
+    }
+
+    function fmAtivo() {
+      return fmUsuario().get("status", "ativo") != "inativo";
+    }
+
+    // Equipe (administrador ou personal) ativa e vinculada a uma academia.
+    function fmEquipe() {
+      return fmTemUsuario() && fmAtivo() && fmUsuario().perfil in ["administrador", "personal"] && fmAcademia() != null;
+    }
+
+    function fmAdmin() {
+      return fmTemUsuario() && fmAtivo() && fmUsuario().perfil == "administrador" && fmAcademia() != null;
+    }
+
+    function fmDaMinhaAcademia(dados) {
+      return dados.get("academiaId", "") == fmAcademia();
+    }
+
+    function fmEquipeDa(dados) {
+      return fmEquipe() && fmDaMinhaAcademia(dados);
+    }
+
+    function fmAdminDa(dados) {
+      return fmAdmin() && fmDaMinhaAcademia(dados);
+    }
+
+    // Na criação: o documento precisa nascer com a academia de quem cria.
+    function fmCriaNaMinhaAcademia() {
+      return request.resource.data.get("academiaId", "") == fmAcademia();
+    }
+
+    // Na edição: ninguém move um documento para outra academia.
+    function fmMantemAcademia() {
+      return request.resource.data.get("academiaId", "") == resource.data.get("academiaId", "");
+    }
+
+    function fmAlunoDono(alunoId) {
+      return fmTemUsuario() && fmUsuario().get("alunoId", "") == alunoId;
+    }
+
+    // Equipe da mesma academia do aluno (para as subcoleções do aluno).
+    function fmEquipeDoAluno(alunoId) {
+      return fmEquipe() &&
+        get(/databases/$(database)/documents/fitmanager_alunos/$(alunoId)).data.get("academiaId", "") == fmAcademia();
+    }
+
+    function fmCriadorDaAcademia(academiaId) {
+      return get(/databases/$(database)/documents/fitmanager_academias/$(academiaId)).data.criadoPor == request.auth.uid;
+    }
+
+    match /fitmanager_academias/{academiaId} {
+      allow read: if fmTemUsuario() && fmAcademia() == academiaId;
+      // Quem cria a conta da academia vira o "dono" (criadoPor) dela.
+      allow create: if fmSignedIn()
+        && request.resource.data.criadoPor == request.auth.uid
+        && request.resource.data.keys().hasOnly(["nome", "whatsapp", "criadoPor", "criadoEm"]);
+      allow update: if fmAdmin() && fmAcademia() == academiaId
+        && request.resource.data.criadoPor == resource.data.criadoPor;
+      allow delete: if false;
     }
 
     match /fitmanager_alunos/{alunoId} {
-      allow read: if fitmanagerIsAdmin() || fitmanagerIsPersonal() || fitmanagerIsOwnerAluno(alunoId);
-      allow write: if fitmanagerIsAdmin() || fitmanagerIsPersonal();
+      allow read: if fmEquipeDa(resource.data) || fmAlunoDono(alunoId);
+      allow create: if fmEquipe() && fmCriaNaMinhaAcademia();
+      allow update: if fmEquipeDa(resource.data) && fmMantemAcademia();
+      allow delete: if fmEquipeDa(resource.data);
 
       // Nomes de subcoleção prefixados (não "treinos"/"execucoesTreino" puros)
       // porque collectionGroup() casa pelo nome da coleção no banco INTEIRO,
       // não pelo caminho do pai — um nome genérico colidiria com qualquer
       // subcoleção de mesmo nome do outro sistema.
       match /fitmanager_Treinos/{treinoId} {
-        allow read: if fitmanagerIsAdmin() || fitmanagerIsPersonal() || fitmanagerIsOwnerAluno(alunoId);
-        allow write: if fitmanagerIsAdmin() || fitmanagerIsPersonal();
+        allow read: if fmEquipeDoAluno(alunoId) || fmAlunoDono(alunoId);
+        allow create: if fmEquipeDoAluno(alunoId) && fmCriaNaMinhaAcademia();
+        allow update: if fmEquipeDoAluno(alunoId) && fmMantemAcademia();
+        allow delete: if fmEquipeDoAluno(alunoId);
       }
 
       match /fitmanager_ExecucoesTreino/{execucaoId} {
-        allow read: if fitmanagerIsAdmin() || fitmanagerIsPersonal() || fitmanagerIsOwnerAluno(alunoId);
-        allow write: if fitmanagerIsOwnerAluno(alunoId) || fitmanagerIsAdmin() || fitmanagerIsPersonal();
+        allow read: if fmEquipeDoAluno(alunoId) || fmAlunoDono(alunoId);
+        allow write: if fmAlunoDono(alunoId) || fmEquipeDoAluno(alunoId);
+      }
+
+      // Avaliações físicas (aba "Acompanhamento" do portal do aluno): o aluno
+      // registra as próprias; a equipe da academia lê e pode corrigir/remover.
+      match /fitmanager_AvaliacoesFisicas/{avaliacaoId} {
+        allow read: if fmEquipeDoAluno(alunoId) || fmAlunoDono(alunoId);
+        allow create: if fmAlunoDono(alunoId) || fmEquipeDoAluno(alunoId);
+        allow update, delete: if fmEquipeDoAluno(alunoId);
       }
     }
 
+    // Consulta collectionGroup dos treinos (tela Treinos do painel): só os
+    // da academia de quem consulta.
+    match /{path=**}/fitmanager_Treinos/{treinoId} {
+      allow read: if fmEquipeDa(resource.data);
+    }
+
+    // Perfil do aluno (tela "Perfil" do portal). Contém a data de nascimento,
+    // por isso só o próprio aluno e a equipe da academia leem; a versão
+    // pública vai para fitmanager_questPerfis, gerada por Cloud Function.
+    match /fitmanager_perfisAlunos/{alunoId} {
+      allow read: if fmAlunoDono(alunoId) || fmEquipeDoAluno(alunoId);
+      allow create, update: if fmAlunoDono(alunoId)
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.bio is string && request.resource.data.bio.size() <= 300
+        && request.resource.data.fotos is list && request.resource.data.fotos.size() <= 6
+        && request.resource.data.visivelQuest is bool;
+      allow delete: if fmEquipeDoAluno(alunoId);
+    }
+
+    // Quest — perfis públicos. Escritos só pelas Cloud Functions; o aluno
+    // pode apenas atualizar a própria presença (online/ultimoSinal).
+    // Outros alunos só veem perfis visíveis da MESMA academia.
+    match /fitmanager_questPerfis/{alunoId} {
+      allow read: if fmSignedIn() && (
+        resource.data.uid == request.auth.uid ||
+        (fmTemUsuario() && resource.data.visivel == true && fmDaMinhaAcademia(resource.data)) ||
+        fmEquipeDa(resource.data));
+      allow update: if fmSignedIn()
+        && resource.data.uid == request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["online", "ultimoSinal"])
+        && request.resource.data.online is bool
+        && request.resource.data.ultimoSinal == request.time;
+      allow create, delete: if false;
+    }
+
+    // Quest — convites/partidas: só leitura para os dois jogadores; toda
+    // escrita passa pelas Cloud Functions, que validam as jogadas.
+    match /fitmanager_questPartidas/{partidaId} {
+      allow read: if fmSignedIn() && request.auth.uid in resource.data.jogadoresUid;
+      allow write: if false;
+    }
+
+    // Quest — estado oculto (ordem das cartas da memória). Nunca legível.
+    match /fitmanager_questSegredos/{partidaId} {
+      allow read, write: if false;
+    }
+
     match /fitmanager_checkins/{checkinId} {
-      allow read: if fitmanagerIsAdmin() || fitmanagerIsPersonal();
+      allow read: if fmEquipeDa(resource.data);
       // Gravado tanto pelo kiosk (Admin SDK, ignora estas regras) quanto pela
       // tela de Câmera do painel web (client SDK, precisa de um usuário
       // autenticado da equipe). Nunca editável/deletável depois de criado.
-      allow create: if fitmanagerIsAdmin() || fitmanagerIsPersonal();
+      allow create: if fmEquipe() && fmCriaNaMinhaAcademia();
       allow update, delete: if false;
     }
 
     match /fitmanager_usuarios/{uid} {
-      allow read: if fitmanagerIsSignedIn() && (request.auth.uid == uid || fitmanagerIsAdmin());
-      // O próprio usuário pode criar seu perfil no cadastro (bootstrap: o
-      // primeiro admin de uma academia ainda não é admin de ninguém quando
-      // se cadastra). Só um admin já existente pode editar/desativar depois.
-      allow create: if fitmanagerIsSignedIn() && request.auth.uid == uid;
-      allow update, delete: if fitmanagerIsAdmin();
+      allow read: if fmSignedIn() && (request.auth.uid == uid || fmEquipeDa(resource.data));
+      allow create: if fmSignedIn() && (
+        // Cadastro de uma academia nova: o próprio usuário cria seu perfil de
+        // administrador, vinculado à academia que ELE acabou de criar.
+        (request.auth.uid == uid
+          && request.resource.data.perfil == "administrador"
+          && fmCriadorDaAcademia(request.resource.data.academiaId))
+        // Admin cadastra qualquer usuário na própria academia; personal só alunos.
+        || (fmAdmin() && fmCriaNaMinhaAcademia())
+        || (fmEquipe() && fmCriaNaMinhaAcademia() && request.resource.data.perfil == "aluno"));
+      allow update: if
+        (fmAdminDa(resource.data) && fmMantemAcademia())
+        // Admin antigo (sem academia) vinculando-se à academia que ele mesmo criou.
+        || (fmSignedIn() && request.auth.uid == uid
+          && resource.data.get("academiaId", null) == null
+          && resource.data.perfil == "administrador"
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["academiaId"])
+          && fmCriadorDaAcademia(request.resource.data.academiaId));
+      allow delete: if fmAdminDa(resource.data);
+    }
+
+    match /fitmanager_exerciciosBiblioteca/{exercicioId} {
+      allow read: if fmEquipeDa(resource.data);
+      allow create: if fmEquipe() && fmCriaNaMinhaAcademia();
+      allow update: if fmEquipeDa(resource.data) && fmMantemAcademia();
+      allow delete: if fmEquipeDa(resource.data);
     }
 
     match /fitmanager_planos/{planoId} {
-      allow read: if fitmanagerIsSignedIn();
-      allow write: if fitmanagerIsAdmin();
+      allow read: if fmTemUsuario() && fmDaMinhaAcademia(resource.data);
+      allow create: if fmAdmin() && fmCriaNaMinhaAcademia();
+      allow update: if fmAdminDa(resource.data) && fmMantemAcademia();
+      allow delete: if fmAdminDa(resource.data);
     }
 
     match /fitmanager_notificacoes/{id} {
-      allow read: if fitmanagerIsAdmin() || fitmanagerIsPersonal();
+      allow read: if fmEquipeDa(resource.data);
       allow write: if false; // só Cloud Functions / dispatcher (Admin SDK)
     }
 
@@ -90,7 +239,7 @@
     }
 
     match /fitmanager_logsAuditoria/{id} {
-      allow read: if fitmanagerIsAdmin();
+      allow read: if fmAdminDa(resource.data);
       allow write: if false; // só Cloud Functions (Admin SDK)
     }
 

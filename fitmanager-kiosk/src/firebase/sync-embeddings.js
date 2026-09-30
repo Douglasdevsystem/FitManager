@@ -16,6 +16,11 @@ const CACHE_PATH = path.join(__dirname, "../cache/embeddings-cache.json");
 // system's data. Must match VITE_FIRESTORE_PREFIX in the admin panel's .env.
 const COLLECTION = `${process.env.FIRESTORE_PREFIX || "fitmanager_"}alunos`;
 
+// Várias academias usam o mesmo banco: este quiosque só pode reconhecer
+// (e liberar) alunos da academia onde está instalado. Sem ACADEMIA_ID o
+// quiosque não sincroniza ninguém — nunca libera alunos de outra academia.
+const ACADEMIA_ID = process.env.ACADEMIA_ID || "";
+
 let cache = []; // [{ id, nome, fotoUrl, faceEmbedding: number[], status }]
 let unsubscribe = null;
 
@@ -52,8 +57,16 @@ async function startEmbeddingsSync(onUpdate) {
   loadCacheFromDisk();
   onUpdate?.(cache);
 
+  if (!ACADEMIA_ID) {
+    console.error("[sync] ACADEMIA_ID não configurado no .env — nenhum aluno será sincronizado. Veja o README.");
+    cache = [];
+    saveCacheToDisk();
+    onUpdate?.(cache);
+    return;
+  }
+
   const db = getDb();
-  unsubscribe = db.collection(COLLECTION).onSnapshot(
+  unsubscribe = db.collection(COLLECTION).where("academiaId", "==", ACADEMIA_ID).onSnapshot(
     (snapshot) => {
       cache = snapshot.docs
         .map((doc) => {

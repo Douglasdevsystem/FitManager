@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { addDoc, collection } from "firebase/firestore";
 import { db, COLLECTIONS } from "../lib/firebase";
 import { useAlunos } from "../lib/hooks";
+import { useAcademiaId } from "../lib/sessao";
+import { abrirCamera, explicarErroCamera, type ErroCamera } from "../lib/camera";
 import { useFaceRecognition, type RecognitionEventKind } from "../hooks/useFaceRecognition";
 import { RecognitionOverlay, type RecognitionOverlayEvent } from "./RecognitionOverlay";
 import type { Aluno } from "../lib/types";
@@ -9,9 +11,10 @@ import type { Aluno } from "../lib/types";
 const OVERLAY_DURATION_MS = 4000;
 const DEVICE_ID = "painel-web";
 
-async function recordCheckin(kind: RecognitionEventKind, aluno: Aluno | null, distance: number) {
+async function recordCheckin(academiaId: string, kind: RecognitionEventKind, aluno: Aluno | null, distance: number) {
   try {
     await addDoc(collection(db, COLLECTIONS.checkins), {
+      academiaId,
       alunoId: aluno?.id ?? null,
       nomeAluno: aluno?.nome ?? "Desconhecido",
       timestamp: new Date().toISOString(),
@@ -31,6 +34,7 @@ async function recordCheckin(kind: RecognitionEventKind, aluno: Aluno | null, di
  * the fullscreen secondary-monitor window (no chrome at all).
  */
 export function CameraFeedPanel({ fullscreen = false }: { fullscreen?: boolean }) {
+  const academiaId = useAcademiaId();
   const { data: alunos } = useAlunos();
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -39,13 +43,14 @@ export function CameraFeedPanel({ fullscreen = false }: { fullscreen?: boolean }
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
   const [deviceId, setDeviceId] = useState<string>("");
   const [cameraReady, setCameraReady] = useState(false);
-  const [cameraError, setCameraError] = useState<string | null>(null);
+  const [cameraError, setCameraError] = useState<ErroCamera | null>(null);
+  const [tentativa, setTentativa] = useState(0);
   const [overlayEvent, setOverlayEvent] = useState<RecognitionOverlayEvent | null>(null);
 
   const handleEvent = (kind: RecognitionEventKind, aluno: Aluno | null, distance: number) => {
     setOverlayEvent({ kind, aluno });
     setTimeout(() => setOverlayEvent((current) => (current?.kind === kind && current.aluno === aluno ? null : current)), OVERLAY_DURATION_MS);
-    void recordCheckin(kind, aluno, distance);
+    void recordCheckin(academiaId, kind, aluno, distance);
   };
 
   const { modelsReady, modelsError, box } = useFaceRecognition({
@@ -69,17 +74,7 @@ export function CameraFeedPanel({ fullscreen = false }: { fullscreen?: boolean }
     setCameraError(null);
     setCameraReady(false);
 
-    if (!navigator.mediaDevices?.getUserMedia) {
-      setCameraError(
-        window.isSecureContext
-          ? "Este navegador não suporta acesso à câmera."
-          : "A câmera só funciona em conexão segura (HTTPS) ou em localhost."
-      );
-      return;
-    }
-
-    navigator.mediaDevices
-      .getUserMedia({ video: deviceId ? { deviceId: { exact: deviceId } } : { facingMode: "user" } })
+    abrirCamera(deviceId || undefined)
       .then((stream) => {
         if (cancelled) {
           stream.getTracks().forEach((t) => t.stop());
@@ -93,7 +88,8 @@ export function CameraFeedPanel({ fullscreen = false }: { fullscreen?: boolean }
         setCameraReady(true);
       })
       .catch((err) => {
-        if (!cancelled) setCameraError(`Não foi possível acessar a câmera (${err.name}).`);
+        console.error("[camera] falha ao abrir a câmera:", err);
+        if (!cancelled) setCameraError(explicarErroCamera(err));
       });
 
     return () => {
@@ -101,7 +97,7 @@ export function CameraFeedPanel({ fullscreen = false }: { fullscreen?: boolean }
       streamRef.current?.getTracks().forEach((t) => t.stop());
       streamRef.current = null;
     };
-  }, [deviceId]);
+  }, [deviceId, tentativa]);
 
   // Desenha o retângulo ao redor do rosto detectado, atualizado a cada frame.
   useEffect(() => {
@@ -147,8 +143,14 @@ export function CameraFeedPanel({ fullscreen = false }: { fullscreen?: boolean }
         <canvas ref={canvasRef} className="absolute inset-0 w-full h-full scale-x-[-1] pointer-events-none" />
 
         {cameraError && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-gray-900 text-red-400 text-sm px-6 text-center">
-            {cameraError}
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-gray-900 px-6 text-center overflow-y-auto">
+            <p className="text-red-400 text-sm font-display font-semibold">📷 {cameraError.titulo}</p>
+            <p className="text-gray-300 text-xs max-w-md leading-relaxed">{cameraError.instrucao}</p>
+            <button onClick={() => setTentativa((t) => t + 1)}
+              className="mt-2 px-4 py-2 rounded-lg bg-green-600 hover:bg-green-700 text-white text-xs font-display font-semibold transition-colors">
+              Tentar novamente
+            </button>
+            <p className="text-gray-600 text-[10px] font-mono-data">código: {cameraError.codigo}</p>
           </div>
         )}
 

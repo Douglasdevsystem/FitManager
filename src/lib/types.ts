@@ -7,6 +7,7 @@ export type AlunoStatus = "ativo" | "vencido" | "inativo" | "pendente";
 
 export interface Aluno {
   id: string;
+  academiaId?: string;
   nome: string;
   endereco: string;
   whatsapp: string;
@@ -30,6 +31,7 @@ export type CheckinStatus = "liberado" | "negado";
 
 export interface Checkin {
   id: string;
+  academiaId?: string;
   alunoId: string | null;
   nomeAluno: string;
   timestamp: string; // ISO datetime
@@ -48,6 +50,7 @@ export type TipoMidiaExercicio = "video" | "foto";
 /** Exercício cadastrado na biblioteca compartilhada (fitmanager_exerciciosBiblioteca), reutilizável em qualquer treino. */
 export interface ExercicioBiblioteca {
   id: string;
+  academiaId?: string;
   nome: string;
   grupoMuscular: GrupoMuscular;
   descricao?: string;
@@ -78,6 +81,7 @@ export interface Exercicio {
 
 export interface Treino {
   id: string;
+  academiaId?: string;
   alunoId: string; // denormalizado a partir do caminho alunos/{alunoId}/...
   alunoNome: string; // denormalizado no momento da criação, evita um lookup por card
   titulo: string;
@@ -100,7 +104,53 @@ export interface ExecucaoTreino {
   criadoEm?: unknown;
 }
 
-export type UsuarioPerfil = "administrador" | "personal" | "aluno";
+export type Sexo = "masculino" | "feminino";
+
+/** Circunferências em cm, padrão de avaliação física. Campo não medido = null. */
+export interface MedidasCorporais {
+  pescoco: number | null;
+  ombros: number | null;
+  torax: number | null;
+  cintura: number | null;
+  abdomen: number | null;
+  quadril: number | null;
+  bracoDirRelaxado: number | null;
+  bracoDirContraido: number | null;
+  bracoEsqRelaxado: number | null;
+  bracoEsqContraido: number | null;
+  antebraco: number | null;
+  coxaDir: number | null;
+  coxaEsq: number | null;
+  panturrilhaDir: number | null;
+  panturrilhaEsq: number | null;
+}
+
+/** Avaliação física (alunos/{alunoId}/fitmanager_AvaliacoesFisicas) — gravada pelo aluno no portal, visível para a equipe. */
+export interface AvaliacaoFisica {
+  id: string;
+  data: string; // ISO datetime
+  peso: number;
+  altura: number; // cm
+  idade: number;
+  sexo: Sexo;
+  pesoMeta: number | null;
+  imc: number;
+  medidas: MedidasCorporais;
+  percentualGordura: number | null;
+  rcq: number | null;
+  criadoEm?: unknown;
+}
+
+/** Academia cliente (fitmanager_academias). Todo dado do sistema é isolado por academiaId. */
+export interface Academia {
+  id: string;
+  nome: string;
+  whatsapp?: string | null;
+  criadoPor: string;
+  criadoEm?: unknown;
+}
+
+export type UsuarioPerfil ="administrador" | "personal" | "aluno";
 
 export interface Usuario {
   id: string; // uid do Firebase Auth
@@ -109,6 +159,8 @@ export interface Usuario {
   perfil: UsuarioPerfil;
   status: "ativo" | "inativo";
   alunoId?: string;
+  academiaId?: string;
+  /** Legado: dados da academia gravados no próprio admin antes de existir fitmanager_academias. */
   academia?: { nome: string; whatsapp?: string | null };
   criadoEm?: unknown;
   ultimoLogin?: unknown;
@@ -116,6 +168,7 @@ export interface Usuario {
 
 export interface LogAuditoria {
   id: string;
+  academiaId?: string;
   usuarioId: string | null;
   acao: string;
   alvoId?: string | null;
